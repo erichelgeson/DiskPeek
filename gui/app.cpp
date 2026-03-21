@@ -1166,15 +1166,19 @@ void App::render_file_list() {
 
             // Label color (bits 1-3 of fdflags)
             int label = (e.fdflags >> 1) & 0x07;
+            // System 7 Finder label colors (value 7=Essential at top of menu, 1=Project at bottom)
+            // fdFlags bits 1-3 store label value in reverse menu order
+            // System 7 Finder label colors — value 7 = top of Label menu (Essential)
+            // Verified against real Mac OS 9 Label menu screenshot
             static const ImU32 label_colors[] = {
                 0,                             // 0: None
-                IM_COL32(255, 160, 50, 50),    // 1: Orange
-                IM_COL32(230, 50, 50, 50),     // 2: Red
-                IM_COL32(240, 120, 180, 50),   // 3: Pink
-                IM_COL32(70, 120, 230, 50),    // 4: Blue
-                IM_COL32(50, 200, 210, 50),    // 5: Cyan
-                IM_COL32(60, 190, 60, 50),     // 6: Green
-                IM_COL32(160, 160, 160, 50),   // 7: Gray
+                IM_COL32(140, 110, 40, 50),    // 1: Project 2 (brown)
+                IM_COL32(60, 160, 60, 50),     // 2: Project 1 (green)
+                IM_COL32(40, 60, 190, 50),     // 3: Personal (dark blue)
+                IM_COL32(50, 190, 220, 50),    // 4: Cool (cyan)
+                IM_COL32(210, 50, 190, 50),    // 5: In Progress (magenta/pink)
+                IM_COL32(220, 30, 30, 50),     // 6: Hot (red)
+                IM_COL32(255, 160, 50, 50),    // 7: Essential (orange)
             };
 
             ImGui::TableNextRow();
@@ -1728,7 +1732,7 @@ void App::render_info_popup() {
 
         // Label color (bits 1-3)
         int label = (info_fdflags_ >> 1) & 0x07;
-        const char* label_names[] = { "None", "Orange", "Red", "Pink", "Blue", "Cyan", "Green", "Gray" };
+        const char* label_names[] = { "None", "Project 2", "Project 1", "Personal", "Cool", "In Progress", "Hot", "Essential" };
         if (ImGui::Combo("Label", &label, label_names, 8)) {
             info_fdflags_ = (info_fdflags_ & ~0x000E) | ((label & 0x07) << 1);
         }
