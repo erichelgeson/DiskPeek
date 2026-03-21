@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <filesystem>
+#include <functional>
 
 #include "platform.h"
 
@@ -1156,6 +1157,7 @@ void App::render() {
     render_type_creator_popup();
     render_info_popup();
     render_rename_popup();
+    render_check_popup();
     render_file_picker();
 
     ImGui::End();
@@ -1176,6 +1178,101 @@ void App::render_toolbar() {
     if (close_disabled) ImGui::EndDisabled();
 
     if (has_volume()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Check")) {
+            check_log_.clear();
+            // Run volume check
+            if (vol_type_ == VolumeType::HFS) {
+                check_log_ += "=== HFS Volume Check ===\n";
+                hfsvolent vstat;
+                if (hfs_vstat(vol_, &vstat) == 0) {
+                    check_log_ += "Volume: " + std::string(vstat.name) + "\n";
+                    check_log_ += "Total: " + format_size(vstat.totbytes) + "\n";
+                    check_log_ += "Free: " + format_size(vstat.freebytes) + "\n";
+                    check_log_ += "Files: " + std::to_string(vstat.numfiles) + "\n";
+                    check_log_ += "Dirs: " + std::to_string(vstat.numdirs) + "\n";
+                    if (vstat.blessed)
+                        check_log_ += "Blessed folder: CNID " + std::to_string(vstat.blessed) + "\n";
+                    check_log_ += "\n";
+
+                    // Check catalog by walking all directories
+                    check_log_ += "Checking catalog tree...\n";
+                    int file_count = 0, dir_count = 0, errors = 0;
+                    std::function<void(const std::string&)> walk;
+                    walk = [&](const std::string& path) {
+                        hfsdir* dir = hfs_opendir(vol_, path.c_str());
+                        if (!dir) { errors++; check_log_ += "  ERROR: cannot open " + path + "\n"; return; }
+                        hfsdirent ent;
+                        while (hfs_readdir(dir, &ent) == 0) {
+                            if (ent.flags & HFS_ISDIR) {
+                                dir_count++;
+                                walk(path + ent.name + ":");
+                            } else {
+                                file_count++;
+                            }
+                        }
+                        hfs_closedir(dir);
+                    };
+                    walk(std::string(vstat.name) + ":");
+
+                    check_log_ += "  Found " + std::to_string(file_count) + " files, "
+                                + std::to_string(dir_count) + " directories\n";
+                    if ((unsigned long)file_count != vstat.numfiles)
+                        check_log_ += "  WARNING: file count mismatch (MDB says " + std::to_string(vstat.numfiles) + ")\n";
+                    if ((unsigned long)dir_count != vstat.numdirs)
+                        check_log_ += "  WARNING: directory count mismatch (MDB says " + std::to_string(vstat.numdirs) + ")\n";
+
+                    if (errors == 0)
+                        check_log_ += "\nVolume appears OK.\n";
+                    else
+                        check_log_ += "\n" + std::to_string(errors) + " error(s) found.\n";
+                } else {
+                    check_log_ += "ERROR: Cannot read volume info\n";
+                }
+            } else if (vol_type_ == VolumeType::HFSPLUS) {
+                check_log_ += "=== HFS+ Volume Check ===\n";
+                check_log_ += "Volume: " + volume_name_ + "\n";
+                check_log_ += "Total: " + format_size(vol_total_bytes_) + "\n";
+                check_log_ += "Free: " + format_size(vol_free_bytes_) + "\n";
+                if (blessed_cnid_)
+                    check_log_ += "Blessed folder: CNID " + std::to_string(blessed_cnid_) + "\n";
+                check_log_ += "\n";
+
+                // Walk all directories via CNID
+                check_log_ += "Checking catalog tree...\n";
+                int file_count = 0, dir_count = 0, errors = 0;
+                std::function<void(uint32_t)> walk;
+                walk = [&](uint32_t folder_cnid) {
+                    HFSPlusDirEntry* ents = nullptr;
+                    int cnt = 0;
+                    if (hfsplus_list_dir_by_cnid(hfsplus_vol_, folder_cnid, &ents, &cnt) != 0) {
+                        errors++;
+                        check_log_ += "  ERROR: cannot list folder CNID " + std::to_string(folder_cnid) + "\n";
+                        return;
+                    }
+                    for (int j = 0; j < cnt; j++) {
+                        if (ents[j].is_dir) {
+                            dir_count++;
+                            walk(ents[j].cnid);
+                        } else {
+                            file_count++;
+                        }
+                    }
+                    hfsplus_free_entries(ents);
+                };
+                walk(2); // kHFSRootFolderID
+
+                check_log_ += "  Found " + std::to_string(file_count) + " files, "
+                            + std::to_string(dir_count) + " directories\n";
+
+                if (errors == 0)
+                    check_log_ += "\nVolume appears OK.\n";
+                else
+                    check_log_ += "\n" + std::to_string(errors) + " error(s) found.\n";
+            }
+            show_check_ = true;
+        }
+
         ImGui::SameLine();
         ImGui::Text("|");
         ImGui::SameLine();
@@ -2019,6 +2116,27 @@ void App::render_info_popup() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             show_info_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void App::render_check_popup() {
+    if (show_check_)
+        ImGui::OpenPopup("Volume Check");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_Appearing);
+
+    if (ImGui::BeginPopupModal("Volume Check", nullptr, ImGuiWindowFlags_None)) {
+        ImGui::BeginChild("##checklog", ImVec2(0, -30), true);
+        ImGui::TextUnformatted(check_log_.c_str());
+        ImGui::EndChild();
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            show_check_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

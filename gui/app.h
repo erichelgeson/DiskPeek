@@ -68,6 +68,7 @@ private:
     void render_type_creator_popup();
     void render_info_popup();
     void render_rename_popup();
+    void render_check_popup();
     void render_progress_bar();
 
     // HFS operations
@@ -183,6 +184,9 @@ private:
 
     bool show_rename_ = false;
     char rename_buf_[256] = {};
+
+    bool show_check_ = false;
+    std::string check_log_;
 
     // Cut/paste for move operations
     std::string cut_path_;         // full Mac-style path of cut entry
