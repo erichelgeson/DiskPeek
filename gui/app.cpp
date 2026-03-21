@@ -2267,8 +2267,12 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
         }
     }
 
-    if ((e.type[0] && strcmp(e.type, "????") != 0) || !rsrc.empty())
-        write_appledouble(out_path, e.type, e.creator, e.fdflags, rsrc);
+    if ((e.type[0] && strcmp(e.type, "????") != 0) || !rsrc.empty()) {
+        // Try native xattrs first, fall back to AppleDouble
+        if (!platform_write_xattr_forkinfo(out_path.c_str(), e.type, e.creator,
+                                            e.fdflags, rsrc.data(), rsrc.size()))
+            write_appledouble(out_path, e.type, e.creator, e.fdflags, rsrc);
+    }
 
     fprintf(stderr, "hfsbrowser: exported %s (%lu bytes)\n", e.name.c_str(), total);
 }
@@ -2557,22 +2561,37 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
             return;
         }
 
-        // Detect type/creator: try magic bytes first, then FAF extension table
+        // Detect type/creator: try xattr FinderInfo, then magic bytes, then FAF extension
         TypeCreatorResult tcr;
         const char* type = "????";
         const char* creator = "????";
 
-        // Read first 1024 bytes for magic detection
-        uint8_t magic_buf[1024];
-        size_t magic_read = fread(magic_buf, 1, sizeof(magic_buf), in);
-        fseek(in, 0, SEEK_SET);
+        // Try reading FinderInfo xattr from host file
+        uint8_t fi_buf[32];
+        bool got_xattr = false;
+        if (platform_getxattr(host_path.c_str(), "com.apple.FinderInfo", fi_buf, 32) >= 32) {
+            memcpy(tcr.type, fi_buf, 4); tcr.type[4] = '\0';
+            memcpy(tcr.creator, fi_buf + 4, 4); tcr.creator[4] = '\0';
+            if (tcr.type[0] && strcmp(tcr.type, "????") != 0) {
+                type = tcr.type;
+                creator = tcr.creator;
+                got_xattr = true;
+            }
+        }
 
-        if (magic_read > 0 && detect_type_creator_magic(magic_buf, magic_read, &tcr)) {
-            type = tcr.type;
-            creator = tcr.creator;
-        } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
-            type = tcr.type;
-            creator = tcr.creator;
+        if (!got_xattr) {
+            // Read first 1024 bytes for magic detection
+            uint8_t magic_buf[1024];
+            size_t magic_read = fread(magic_buf, 1, sizeof(magic_buf), in);
+            fseek(in, 0, SEEK_SET);
+
+            if (magic_read > 0 && detect_type_creator_magic(magic_buf, magic_read, &tcr)) {
+                type = tcr.type;
+                creator = tcr.creator;
+            } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
+                type = tcr.type;
+                creator = tcr.creator;
+            }
         }
 
         hfsfile* f = hfs_create(vol_, hfs_path.c_str(), type, creator);
@@ -2600,6 +2619,21 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
         fclose(in);
 
         if (ok) {
+            // Try to import resource fork from xattr
+            {
+                // First query size, then read
+                int rsrc_size = platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", nullptr, 0);
+                if (rsrc_size > 0) {
+                    std::vector<uint8_t> rsrc(rsrc_size);
+                    platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", rsrc.data(), rsrc.size());
+                    hfsfile* rf = hfs_open(vol_, hfs_path.c_str());
+                    if (rf) {
+                        hfs_setfork(rf, 1);
+                        hfs_write(rf, rsrc.data(), rsrc_size);
+                        hfs_close(rf);
+                    }
+                }
+            }
             status_text_ = "Imported: " + filename + " (" + format_size(total) + ")";
             refresh_listing();
         } else {
