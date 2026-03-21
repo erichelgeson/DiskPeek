@@ -196,6 +196,68 @@ static std::vector<uint8_t> icon_from_icn(const uint8_t* data, uint32_t len) {
     return rgba;
 }
 
+// Mac 4-bit system color palette (16 entries)
+static const uint8_t mac_clut4_rgb[16][3] = {
+    {255,255,255}, // 0: White
+    {252,243,5},   // 1: Yellow
+    {255,100,2},   // 2: Orange
+    {221,8,6},     // 3: Red
+    {242,8,132},   // 4: Magenta
+    {71,0,165},    // 5: Purple
+    {0,0,212},     // 6: Blue
+    {2,171,234},   // 7: Cyan
+    {31,183,20},   // 8: Green
+    {0,100,18},    // 9: Dark Green
+    {86,44,5},     // 10: Brown
+    {144,113,58},  // 11: Tan
+    {192,192,192}, // 12: Light Gray
+    {128,128,128}, // 13: Medium Gray
+    {64,64,64},    // 14: Dark Gray
+    {0,0,0},       // 15: Black
+};
+
+// Convert icl4 (32x32 4-bit color icon, 512 bytes) with ICN# mask to RGBA, pixel-doubled to 64x64.
+static std::vector<uint8_t> icon_from_icl4(const uint8_t* color_data, uint32_t color_len,
+                                            const uint8_t* mask_data, uint32_t mask_len) {
+    if (color_len < 512) return {};
+
+    const uint8_t* mask_bits = nullptr;
+    if (mask_data && mask_len >= 256)
+        mask_bits = mask_data + 128;
+
+    std::vector<uint8_t> rgba(64 * 64 * 4);
+
+    for (int y = 0; y < 32; y++) {
+        for (int x = 0; x < 32; x++) {
+            // 4 bits per pixel, 2 pixels per byte
+            int byte_off = y * 16 + x / 2;
+            uint8_t cidx = (x & 1) ? (color_data[byte_off] & 0x0F) : (color_data[byte_off] >> 4);
+            uint8_t r = mac_clut4_rgb[cidx][0];
+            uint8_t g = mac_clut4_rgb[cidx][1];
+            uint8_t b = mac_clut4_rgb[cidx][2];
+            uint8_t a = 255;
+
+            if (mask_bits) {
+                int mbyte = y * 4 + x / 8;
+                int mbit = 7 - (x % 8);
+                if (!((mask_bits[mbyte] >> mbit) & 1))
+                    a = 0;
+            } else if (cidx == 0) {
+                a = 0; // White = transparent if no mask
+            }
+
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    int idx = ((y*2+dy) * 64 + (x*2+dx)) * 4;
+                    rgba[idx+0] = r; rgba[idx+1] = g;
+                    rgba[idx+2] = b; rgba[idx+3] = a;
+                }
+            }
+        }
+    }
+    return rgba;
+}
+
 // Convert icl8 (32x32 8-bit color icon, 1024 bytes) with ICN# mask to RGBA, pixel-doubled to 64x64.
 static std::vector<uint8_t> icon_from_icl8(const uint8_t* color_data, uint32_t color_len,
                                              const uint8_t* mask_data, uint32_t mask_len) {
@@ -939,21 +1001,24 @@ std::vector<uint8_t> App::read_rsrc_fork(const std::string& hfs_path) {
 GLuint App::create_icon_from_rsrc(const std::vector<uint8_t>& rsrc) {
     static const int16_t ids_to_try[] = { 128, -16455, 0 };
 
-    uint32_t ICN_TYPE = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
+    uint32_t ICN_TYPE  = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
     uint32_t ICL8_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '8';
+    uint32_t ICL4_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '4';
 
     for (int i = 0; ids_to_try[i] != 0 || i < 2; i++) {
-        // Try icl8 (8-bit color) first with ICN# mask
-        uint32_t color_len = 0, mask_len = 0;
-        const uint8_t* color_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color_len);
+        uint32_t color8_len = 0, color4_len = 0, mask_len = 0;
+        const uint8_t* color8_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color8_len);
+        const uint8_t* color4_data = find_resource(rsrc, ICL4_TYPE, ids_to_try[i], &color4_len);
         const uint8_t* mask_data = find_resource(rsrc, ICN_TYPE, ids_to_try[i], &mask_len);
 
         std::vector<uint8_t> rgba;
 
-        if (color_data && color_len >= 1024) {
-            rgba = icon_from_icl8(color_data, color_len, mask_data, mask_len);
+        // Try icl8 (256 color) first, then icl4 (16 color), then ICN# (1-bit)
+        if (color8_data && color8_len >= 1024) {
+            rgba = icon_from_icl8(color8_data, color8_len, mask_data, mask_len);
+        } else if (color4_data && color4_len >= 512) {
+            rgba = icon_from_icl4(color4_data, color4_len, mask_data, mask_len);
         } else if (mask_data && mask_len >= 256) {
-            // Fall back to 1-bit ICN#
             rgba = icon_from_icn(mask_data, mask_len);
         }
 
@@ -2910,18 +2975,22 @@ bool App::export_icon_png(const std::string& out_path, const HFSEntry& /* entry 
     if (rsrc.empty()) return false;
 
     // Re-use the icon creation logic to get 64x64 RGBA
-    uint32_t ICN_TYPE = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
+    uint32_t ICN_TYPE  = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
     uint32_t ICL8_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '8';
+    uint32_t ICL4_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '4';
     static const int16_t ids_to_try[] = { 128, -16455, 0 };
 
     std::vector<uint8_t> rgba;
     for (int i = 0; ids_to_try[i] != 0 || i < 2; i++) {
-        uint32_t color_len = 0, mask_len = 0;
-        const uint8_t* color_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color_len);
+        uint32_t color8_len = 0, color4_len = 0, mask_len = 0;
+        const uint8_t* color8_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color8_len);
+        const uint8_t* color4_data = find_resource(rsrc, ICL4_TYPE, ids_to_try[i], &color4_len);
         const uint8_t* mask_data = find_resource(rsrc, ICN_TYPE, ids_to_try[i], &mask_len);
 
-        if (color_data && color_len >= 1024)
-            rgba = icon_from_icl8(color_data, color_len, mask_data, mask_len);
+        if (color8_data && color8_len >= 1024)
+            rgba = icon_from_icl8(color8_data, color8_len, mask_data, mask_len);
+        else if (color4_data && color4_len >= 512)
+            rgba = icon_from_icl4(color4_data, color4_len, mask_data, mask_len);
         else if (mask_data && mask_len >= 256)
             rgba = icon_from_icn(mask_data, mask_len);
 
