@@ -69,6 +69,8 @@ private:
     void render_info_popup();
     void render_rename_popup();
     void render_check_popup();
+    void render_about_popup();
+    bool show_about_ = false;
     void render_progress_bar();
 
     // HFS operations

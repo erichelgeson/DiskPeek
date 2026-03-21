@@ -1158,6 +1158,7 @@ void App::render() {
     render_info_popup();
     render_rename_popup();
     render_check_popup();
+    render_about_popup();
     render_file_picker();
 
     ImGui::End();
@@ -1166,6 +1167,10 @@ void App::render() {
 void App::render_toolbar() {
     if (ImGui::Button("Open Image")) {
         open_file_picker_for_open();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("About")) {
+        show_about_ = true;
     }
 
     ImGui::SameLine();
@@ -2116,6 +2121,66 @@ void App::render_info_popup() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             show_info_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void App::render_about_popup() {
+    if (show_about_)
+        ImGui::OpenPopup("About HFS Browser");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("About HFS Browser", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("HFS Browser");
+        ImGui::Text("A tool for browsing and editing classic Macintosh");
+        ImGui::Text("HFS and HFS+ disk images.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Built with:");
+        ImGui::Spacing();
+
+        ImGui::Text("hfsutils");
+        ImGui::TextDisabled("  Robert Leslie, 1996-1998");
+        ImGui::TextDisabled("  HFS filesystem library (GPLv2)");
+        ImGui::Spacing();
+
+        ImGui::Text("libdmg-hfsplus");
+        ImGui::TextDisabled("  planetbeing (David Wang)");
+        ImGui::TextDisabled("  HFS+ filesystem library (GPLv3)");
+        ImGui::Spacing();
+
+        ImGui::Text("Dear ImGui");
+        ImGui::TextDisabled("  Omar Cornut");
+        ImGui::TextDisabled("  Immediate mode GUI (MIT)");
+        ImGui::Spacing();
+
+        ImGui::Text("SDL2");
+        ImGui::TextDisabled("  Sam Lantinga / libsdl.org");
+        ImGui::TextDisabled("  Cross-platform multimedia library (zlib)");
+        ImGui::Spacing();
+
+        ImGui::Text("Fix-A-Fork");
+        ImGui::TextDisabled("  Eric Helgeson / BlueSCSI project");
+        ImGui::TextDisabled("  Type/creator detection (portions re-licensed GPLv3)");
+        ImGui::Spacing();
+
+        ImGui::Text("zlib");
+        ImGui::TextDisabled("  Jean-loup Gailly, Mark Adler");
+        ImGui::TextDisabled("  Compression library (zlib)");
+        ImGui::Spacing();
+
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextDisabled("https://github.com/erichelgeson/hfsutils");
+        ImGui::Spacing();
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            show_about_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
