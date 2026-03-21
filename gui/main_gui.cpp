@@ -68,8 +68,83 @@ int main(int, char**) {
         if (scale < 1.0f) scale = 1.0f;
     }
 
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().ScaleAllSizes(scale);
+    // Classic Mac OS 6/7 inspired theme
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* c = style.Colors;
+
+    // Window
+    c[ImGuiCol_WindowBg]            = ImVec4(0.93f, 0.93f, 0.93f, 1.00f); // light gray desktop
+    c[ImGuiCol_ChildBg]             = ImVec4(1.00f, 1.00f, 1.00f, 1.00f); // white content area
+    c[ImGuiCol_PopupBg]             = ImVec4(1.00f, 1.00f, 1.00f, 0.98f);
+
+    // Text
+    c[ImGuiCol_Text]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f); // black text
+    c[ImGuiCol_TextDisabled]        = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+
+    // Borders — dark outer, white inner bevel
+    c[ImGuiCol_Border]              = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+    c[ImGuiCol_BorderShadow]        = ImVec4(1.00f, 1.00f, 1.00f, 0.40f);
+
+    // Frames (input fields, checkboxes)
+    c[ImGuiCol_FrameBg]             = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+    c[ImGuiCol_FrameBgHovered]      = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    c[ImGuiCol_FrameBgActive]       = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
+
+    // Title bar
+    c[ImGuiCol_TitleBg]             = ImVec4(0.80f, 0.80f, 0.80f, 1.00f);
+    c[ImGuiCol_TitleBgActive]       = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
+    c[ImGuiCol_TitleBgCollapsed]    = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
+    c[ImGuiCol_MenuBarBg]           = ImVec4(0.86f, 0.86f, 0.86f, 1.00f);
+
+    // Buttons — beveled 3D look
+    c[ImGuiCol_Button]              = ImVec4(0.83f, 0.83f, 0.83f, 1.00f);
+    c[ImGuiCol_ButtonHovered]       = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
+    c[ImGuiCol_ButtonActive]        = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
+
+    // Headers (table headers, collapsing headers)
+    c[ImGuiCol_Header]              = ImVec4(0.00f, 0.00f, 0.00f, 0.15f);
+    c[ImGuiCol_HeaderHovered]       = ImVec4(0.00f, 0.00f, 0.00f, 0.25f);
+    c[ImGuiCol_HeaderActive]        = ImVec4(0.00f, 0.00f, 0.00f, 0.35f);
+
+    // Scrollbar
+    c[ImGuiCol_ScrollbarBg]         = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    c[ImGuiCol_ScrollbarGrab]       = ImVec4(0.70f, 0.70f, 0.70f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabHovered]= ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.40f, 0.40f, 0.40f, 1.00f);
+
+    // Separator
+    c[ImGuiCol_Separator]           = ImVec4(0.00f, 0.00f, 0.00f, 0.30f);
+    c[ImGuiCol_SeparatorHovered]    = ImVec4(0.00f, 0.00f, 0.00f, 0.50f);
+    c[ImGuiCol_SeparatorActive]     = ImVec4(0.00f, 0.00f, 0.00f, 0.70f);
+
+    // Selection (classic Mac highlight = dark blue/black inversion)
+    c[ImGuiCol_TextSelectedBg]      = ImVec4(0.00f, 0.00f, 0.50f, 0.35f);
+
+    // Table
+    c[ImGuiCol_TableHeaderBg]       = ImVec4(0.86f, 0.86f, 0.86f, 1.00f);
+    c[ImGuiCol_TableBorderStrong]   = ImVec4(0.00f, 0.00f, 0.00f, 0.30f);
+    c[ImGuiCol_TableBorderLight]    = ImVec4(0.00f, 0.00f, 0.00f, 0.15f);
+    c[ImGuiCol_TableRowBg]          = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+    c[ImGuiCol_TableRowBgAlt]       = ImVec4(0.96f, 0.96f, 0.96f, 1.00f);
+
+    // Misc
+    c[ImGuiCol_CheckMark]           = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+    c[ImGuiCol_SliderGrab]          = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+    c[ImGuiCol_SliderGrabActive]    = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+
+    // Style tweaks for Mac OS look
+    style.WindowRounding    = 0.0f;  // sharp corners like classic Mac
+    style.FrameRounding     = 0.0f;
+    style.GrabRounding      = 0.0f;
+    style.ScrollbarRounding = 0.0f;
+    style.TabRounding       = 0.0f;
+    style.FrameBorderSize   = 1.0f;  // visible borders on controls
+    style.WindowBorderSize  = 1.0f;
+    style.PopupBorderSize   = 1.0f;
+    style.FramePadding      = ImVec2(6, 3);
+    style.ItemSpacing       = ImVec2(6, 4);
+
+    style.ScaleAllSizes(scale);
     io.Fonts->AddFontDefault();
     io.FontGlobalScale = scale;
 
@@ -115,7 +190,7 @@ int main(int, char**) {
         int display_w, display_h;
         SDL_GetWindowSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
-        glClearColor(0.12f, 0.12f, 0.14f, 1.00f);
+        glClearColor(0.93f, 0.93f, 0.93f, 1.00f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window);

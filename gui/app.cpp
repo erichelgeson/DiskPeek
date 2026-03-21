@@ -388,64 +388,89 @@ void App::draw_folder_icon(ImVec2 pos, float size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float s = size;
 
-    // Folder body
-    ImU32 body = IM_COL32(100, 160, 230, 255);
-    ImU32 tab  = IM_COL32(80, 140, 210, 255);
+    // Classic Mac OS blue folder colors
+    ImU32 body   = IM_COL32(100, 130, 200, 255);
+    ImU32 tab    = IM_COL32(80, 110, 180, 255);
+    ImU32 shadow = IM_COL32(50, 70, 130, 255);
+    ImU32 hilite = IM_COL32(140, 170, 230, 255);
 
     // Tab (top-left)
     dl->AddRectFilled(
-        ImVec2(pos.x, pos.y + s * 0.1f),
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.1f),
         ImVec2(pos.x + s * 0.45f, pos.y + s * 0.3f),
-        tab, 1.0f);
+        tab);
 
     // Body
     dl->AddRectFilled(
-        ImVec2(pos.x, pos.y + s * 0.25f),
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.25f),
         ImVec2(pos.x + s * 0.95f, pos.y + s * 0.9f),
-        body, 2.0f);
+        body);
 
-    // Highlight line
+    // Top highlight
     dl->AddLine(
-        ImVec2(pos.x + 1, pos.y + s * 0.3f),
-        ImVec2(pos.x + s * 0.93f, pos.y + s * 0.3f),
-        IM_COL32(140, 190, 255, 200));
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.25f),
+        ImVec2(pos.x + s * 0.95f, pos.y + s * 0.25f),
+        hilite);
+
+    // Bottom/right shadow
+    dl->AddLine(
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.9f),
+        ImVec2(pos.x + s * 0.95f, pos.y + s * 0.9f),
+        shadow);
+    dl->AddLine(
+        ImVec2(pos.x + s * 0.95f, pos.y + s * 0.25f),
+        ImVec2(pos.x + s * 0.95f, pos.y + s * 0.9f),
+        shadow);
+
+    // Black outline
+    dl->AddRect(
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.25f),
+        ImVec2(pos.x + s * 0.95f, pos.y + s * 0.9f),
+        IM_COL32(0, 0, 0, 200));
+    dl->AddRect(
+        ImVec2(pos.x + s * 0.05f, pos.y + s * 0.1f),
+        ImVec2(pos.x + s * 0.45f, pos.y + s * 0.3f),
+        IM_COL32(0, 0, 0, 200));
 }
 
 void App::draw_file_icon(ImVec2 pos, float size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float s = size;
-    float fold = s * 0.25f;
+    float fold = s * 0.2f;
 
-    ImU32 page = IM_COL32(220, 220, 230, 255);
-    ImU32 edge = IM_COL32(160, 160, 170, 255);
+    // Classic Mac document — white page with dog-ear, black outline
+    ImU32 page   = IM_COL32(255, 255, 255, 255);
+    ImU32 outline = IM_COL32(0, 0, 0, 220);
+    ImU32 fold_bg = IM_COL32(210, 210, 210, 255);
+
+    float x0 = pos.x + s * 0.2f;
+    float x1 = pos.x + s * 0.8f;
+    float xf = pos.x + s * 0.6f;   // fold start X
+    float y0 = pos.y + s * 0.05f;
+    float y1 = pos.y + s * 0.95f;
 
     // Page body (with corner cut)
     ImVec2 points[5] = {
-        ImVec2(pos.x + s * 0.15f, pos.y + s * 0.05f),
-        ImVec2(pos.x + s * 0.7f,  pos.y + s * 0.05f),
-        ImVec2(pos.x + s * 0.85f, pos.y + s * 0.05f + fold),
-        ImVec2(pos.x + s * 0.85f, pos.y + s * 0.95f),
-        ImVec2(pos.x + s * 0.15f, pos.y + s * 0.95f),
+        ImVec2(x0, y0),
+        ImVec2(xf, y0),
+        ImVec2(x1, y0 + fold),
+        ImVec2(x1, y1),
+        ImVec2(x0, y1),
     };
     dl->AddConvexPolyFilled(points, 5, page);
-    dl->AddPolyline(points, 5, edge, ImDrawFlags_Closed, 1.0f);
+    dl->AddPolyline(points, 5, outline, ImDrawFlags_Closed, 1.0f);
 
     // Corner fold
     dl->AddTriangleFilled(
-        ImVec2(pos.x + s * 0.7f,  pos.y + s * 0.05f),
-        ImVec2(pos.x + s * 0.85f, pos.y + s * 0.05f + fold),
-        ImVec2(pos.x + s * 0.7f,  pos.y + s * 0.05f + fold),
-        IM_COL32(180, 180, 190, 255));
-
-    // Text lines
-    ImU32 line_col = IM_COL32(170, 170, 180, 255);
-    for (int i = 0; i < 3; i++) {
-        float ly = pos.y + s * (0.4f + i * 0.15f);
-        dl->AddLine(
-            ImVec2(pos.x + s * 0.25f, ly),
-            ImVec2(pos.x + s * 0.75f, ly),
-            line_col, 1.0f);
-    }
+        ImVec2(xf, y0),
+        ImVec2(x1, y0 + fold),
+        ImVec2(xf, y0 + fold),
+        fold_bg);
+    dl->AddTriangle(
+        ImVec2(xf, y0),
+        ImVec2(x1, y0 + fold),
+        ImVec2(xf, y0 + fold),
+        outline, 1.0f);
 }
 
 // --- App lifecycle ---
@@ -1271,7 +1296,7 @@ void App::render_action_bar() {
 
     if (!has_vol) ImGui::BeginDisabled();
 
-    if (ImGui::Button("Copy to Image")) {
+    if (ImGui::Button("Import")) {
         if (has_vol)
             open_file_picker_for_import();
     }
@@ -1281,7 +1306,7 @@ void App::render_action_bar() {
     ImGui::SameLine();
 
     if (!has_sel) ImGui::BeginDisabled();
-    if (ImGui::Button("Copy from Image")) {
+    if (ImGui::Button("Extract")) {
         if (has_sel) {
             const HFSEntry& e = entries_[selected_entry_];
             if (e.is_dir) {
@@ -1293,7 +1318,7 @@ void App::render_action_bar() {
         }
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Export selected file or folder from image to your computer");
+        ImGui::SetTooltip("Extract selected file or folder from image to your computer");
     if (!has_sel) ImGui::EndDisabled();
 
     ImGui::SameLine();
