@@ -1111,7 +1111,7 @@ void App::render_toolbar() {
         ImGui::SameLine();
         ImGui::Text("|");
         ImGui::SameLine();
-        ImGui::Text("Volume: \"%s\"  (%s / %s free)",
+        ImGui::Text("\"%s\"  (%s / %s free)",
             volume_name_.c_str(),
             format_size(vol_total_bytes_).c_str(),
             format_size(vol_free_bytes_).c_str());
@@ -1124,7 +1124,73 @@ void App::render_path_bar() {
         return;
     }
 
-    ImGui::Text("Path: %s", current_path_.c_str());
+    // Split path into clickable segments: "VolName:Foo:Bar:" → [VolName] [Foo] [Bar]
+    ImGui::Text("Path:");
+    ImGui::SameLine();
+
+    std::string path = current_path_;
+    // Remove trailing colon for splitting
+    if (!path.empty() && path.back() == ':') path.pop_back();
+
+    std::vector<std::string> segments;
+    size_t start = 0;
+    for (size_t i = 0; i <= path.size(); i++) {
+        if (i == path.size() || path[i] == ':') {
+            segments.push_back(path.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+
+    for (size_t s = 0; s < segments.size(); s++) {
+        if (s > 0) {
+            ImGui::SameLine(0, 0);
+            ImGui::Text(":");
+            ImGui::SameLine(0, 0);
+        }
+
+        // Build the path up to this segment
+        std::string target;
+        for (size_t j = 0; j <= s; j++) {
+            target += segments[j];
+            target += ":";
+        }
+
+        // Last segment is current dir — not clickable
+        if (s == segments.size() - 1) {
+            ImGui::Text("%s", segments[s].c_str());
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.7f, 1.0f));
+            char btn_id[256];
+            snprintf(btn_id, sizeof(btn_id), "%s##path%d", segments[s].c_str(), (int)s);
+            if (ImGui::SmallButton(btn_id)) {
+                // Navigate to this path
+                if (vol_type_ == VolumeType::HFS) {
+                    hfs_chdir(vol_, target.c_str());
+                } else if (vol_type_ == VolumeType::HFSPLUS) {
+                    // Rebuild CNID stack by navigating from root
+                    cnid_stack_.clear();
+                    current_cnid_ = 2; // root
+                    // Walk segments to find each folder CNID
+                    for (size_t j = 1; j <= s; j++) {
+                        HFSPlusDirEntry* ents = nullptr;
+                        int cnt = 0;
+                        hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)current_cnid_, &ents, &cnt);
+                        for (int k = 0; k < cnt; k++) {
+                            if (ents[k].is_dir && segments[j] == ents[k].name) {
+                                cnid_stack_.push_back(current_cnid_);
+                                current_cnid_ = ents[k].cnid;
+                                break;
+                            }
+                        }
+                        hfsplus_free_entries(ents);
+                    }
+                }
+                current_path_ = target;
+                refresh_listing();
+            }
+            ImGui::PopStyleColor();
+        }
+    }
 }
 
 void App::render_file_list() {
@@ -1139,14 +1205,6 @@ void App::render_file_list() {
         return;
     }
 
-    // Parent directory entry
-    if (current_path_ != volume_name_ + ":") {
-        if (ImGui::Selectable("  ..  (parent directory)", false, ImGuiSelectableFlags_AllowDoubleClick)) {
-            if (ImGui::IsMouseDoubleClicked(0)) {
-                navigate_up();
-            }
-        }
-    }
 
     if (ImGui::BeginTable("files", 4,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
