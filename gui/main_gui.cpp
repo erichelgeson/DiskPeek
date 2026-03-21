@@ -60,7 +60,18 @@ int main(int, char**) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+    // Scale UI based on display DPI
+    float dpi = 0;
+    float scale = 1.0f;
+    if (SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), &dpi, nullptr, nullptr) == 0 && dpi > 0) {
+        scale = dpi / 96.0f;
+        if (scale < 1.0f) scale = 1.0f;
+    }
+
     ImGui::StyleColorsDark();
+    ImGui::GetStyle().ScaleAllSizes(scale);
+    io.Fonts->AddFontDefault();
+    io.FontGlobalScale = scale;
 
     ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -81,7 +92,12 @@ int main(int, char**) {
                 event.window.windowID == SDL_GetWindowID(window))
                 done = true;
             if (event.type == SDL_DROPFILE) {
-                app.open_image(event.drop.file);
+                if (app.has_volume()) {
+                    // Volume is open — import the dropped file
+                    app.import_file(event.drop.file);
+                } else {
+                    app.open_image(event.drop.file);
+                }
                 SDL_free(event.drop.file);
             }
         }

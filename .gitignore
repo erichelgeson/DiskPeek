@@ -1,0 +1,49 @@
+# Build artifacts
+builddir/
+*.o
+*.a
+
+# Autoconf generated
+autom4te.cache/
+config.cache
+config.log
+config.status
+config.h
+config.h.in~
+configure~
+Makefile
+libhfs/Makefile
+libhfs/autom4te.cache/
+libhfs/config.h
+libhfs/config.h.in~
+libhfs/config.log
+libhfs/config.status
+libhfs/configure~
+libhfs/os.c
+librsrc/Makefile
+librsrc/config.h
+librsrc/config.log
+librsrc/config.status
+hfsck/Makefile
+linux/Makefile
+.stamp/
+
+# Built binaries
+hattrib
+hcd
+hcopy
+hdel
+hdir
+hformat
+hfsutil
+hls
+hmkdir
+hmount
+hpwd
+hrename
+hrmdir
+humount
+hvol
+
+# ImGui runtime
+imgui.ini

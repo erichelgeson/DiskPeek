@@ -1,0 +1,86 @@
+/*
+ * HFS+ operations wrapper around libdmg-hfsplus
+ */
+
+#ifndef HFSPLUS_OPS_H
+#define HFSPLUS_OPS_H
+
+#include <cstdint>
+#include <cstddef>
+
+struct HFSPlusVolume;
+
+// Open an HFS+ volume from a flat file at the given byte offset.
+// readonly=true opens for read-only access.
+// Returns nullptr on failure.
+HFSPlusVolume* hfsplus_open(const char* path, uint64_t partition_offset, bool readonly);
+
+void hfsplus_close(HFSPlusVolume* vol);
+
+// Volume info
+const char* hfsplus_volume_name(HFSPlusVolume* vol);
+uint64_t hfsplus_total_bytes(HFSPlusVolume* vol);
+uint64_t hfsplus_free_bytes(HFSPlusVolume* vol);
+
+// Directory entry from HFS+
+struct HFSPlusDirEntry {
+    char name[256];
+    bool is_dir;
+    uint32_t cnid;
+    uint32_t parent_cnid;
+    uint64_t data_size;
+    uint64_t rsrc_size;
+    char type[5];
+    char creator[5];
+    uint16_t finder_flags;
+};
+
+// List directory contents. path uses Mac-style ":" separators.
+// Caller must free entries with hfsplus_free_entries().
+// Returns 0 on success, -1 on failure.
+int hfsplus_list_dir(HFSPlusVolume* vol, const char* path,
+                     HFSPlusDirEntry** entries, int* count);
+
+// List directory contents by folder CNID (avoids path lookup issues).
+int hfsplus_list_dir_by_cnid(HFSPlusVolume* vol, uint32_t folder_cnid,
+                              HFSPlusDirEntry** entries, int* count);
+
+void hfsplus_free_entries(HFSPlusDirEntry* entries);
+
+// Read file data. fork: 0=data, 1=resource.
+// Caller must free *data with free().
+// Returns 0 on success, -1 on failure.
+int hfsplus_read_file(HFSPlusVolume* vol, const char* path,
+                      uint8_t** data, size_t* size, int fork);
+
+// Read file data by CNID (avoids path lookup issues with special characters).
+// parent_cnid is the folder CNID containing the file (needed for catalog key lookup).
+// Returns 0 on success, -1 on failure.
+int hfsplus_read_file_by_cnid(HFSPlusVolume* vol, uint32_t cnid, uint32_t parent_cnid,
+                               uint8_t** data, size_t* size, int fork);
+
+// Write a file (data fork only). Creates or overwrites.
+// Returns 0 on success, -1 on failure.
+int hfsplus_write_file(HFSPlusVolume* vol, const char* path,
+                       const uint8_t* data, size_t size);
+
+// Delete a file or empty directory.
+// Returns 0 on success, -1 on failure.
+int hfsplus_delete(HFSPlusVolume* vol, const char* path);
+
+// Create a directory.
+// Returns 0 on success, -1 on failure.
+int hfsplus_mkdir(HFSPlusVolume* vol, const char* path);
+
+// Write resource fork data to an existing file.
+// Returns 0 on success, -1 on failure.
+int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
+                            const uint8_t* data, size_t size);
+
+// Set type and creator codes on a file.
+// type and creator must be exactly 4 bytes each.
+// Returns 0 on success, -1 on failure.
+int hfsplus_set_type_creator(HFSPlusVolume* vol, const char* path,
+                             const char* type, const char* creator);
+
+#endif // HFSPLUS_OPS_H

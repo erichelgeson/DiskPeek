@@ -19,6 +19,7 @@
             SDL2
             libGL
             libx11
+            zlib
           ];
         };
       });

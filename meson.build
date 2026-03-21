@@ -53,6 +53,44 @@ libhfs = static_library('hfs',
   c_args : ['-DHAVE_CONFIG_H'],
 )
 
+# libdmg-hfsplus (HFS+ support)
+zlib_dep = dependency('zlib')
+
+libdmg_hfsplus_inc = include_directories(
+  'lib/libdmg-hfsplus/includes',
+  'lib/libdmg-hfsplus/includes/hfs',
+)
+
+libdmg_hfsplus_src = files(
+  'lib/libdmg-hfsplus/hfs/btree.c',
+  'lib/libdmg-hfsplus/hfs/catalog.c',
+  'lib/libdmg-hfsplus/hfs/extents.c',
+  'lib/libdmg-hfsplus/hfs/fastunicodecompare.c',
+  'lib/libdmg-hfsplus/hfs/flatfile.c',
+  'lib/libdmg-hfsplus/hfs/hfslib.c',
+  'lib/libdmg-hfsplus/hfs/hfscompress.c',
+  'lib/libdmg-hfsplus/hfs/rawfile.c',
+  'lib/libdmg-hfsplus/hfs/utility.c',
+  'lib/libdmg-hfsplus/hfs/volume.c',
+  'lib/libdmg-hfsplus/hfs/xattr.c',
+  'lib/libdmg-hfsplus/hfs/abstractfile.c',
+  'lib/libdmg-hfsplus/hfs/endian_init.c',
+)
+
+libdmg_hfsplus = static_library('dmg-hfsplus',
+  libdmg_hfsplus_src,
+  include_directories : libdmg_hfsplus_inc,
+  dependencies : zlib_dep,
+  c_args : [
+    '-D_GNU_SOURCE',
+    '-Wno-unused-parameter',
+    '-Wno-sign-compare',
+    '-Wno-address-of-packed-member',
+    '-Wno-maybe-uninitialized',
+    '-Wno-unused-but-set-variable',
+  ],
+)
+
 # GUI application
 sdl2_dep = dependency('sdl2')
 gl_dep = dependency('gl')
@@ -87,16 +125,23 @@ imgui_sources = files(
   'lib/imgui/backends/imgui_impl_opengl3.cpp',
 )
 
+binhex_lib = static_library('binhex',
+  files('binhex.c', 'crc.c'),
+  include_directories : [libhfs_inc],
+  c_args : ['-DHAVE_CONFIG_H', '-D_GNU_SOURCE'],
+)
+
 gui_sources = files(
   'gui/main_gui.cpp',
   'gui/app.cpp',
+  'gui/hfsplus_ops.cpp',
 )
 
 executable('hfsbrowser',
   gui_sources + imgui_sources,
-  include_directories : [libhfs_inc, imgui_inc, include_directories('gui')],
-  dependencies : [sdl2_dep, gl_dep, thread_dep],
-  link_with : libhfs,
+  include_directories : [libhfs_inc, libdmg_hfsplus_inc, imgui_inc, include_directories('gui'), include_directories('.')],
+  dependencies : [sdl2_dep, gl_dep, thread_dep, zlib_dep],
+  link_with : [libhfs, libdmg_hfsplus, binhex_lib],
   link_args : gui_link_args,
   install : true,
 )
