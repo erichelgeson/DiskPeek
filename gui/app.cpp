@@ -1222,11 +1222,73 @@ void App::render_file_list() {
 
                     if (e.icon_tex) {
                         if (ImGui::MenuItem("Save Icon as PNG")) {
-                            picker_mode_ = PickerMode::EXPORT_FILE;
-                            // We'll handle this specially — tag it
-                            // For now, directly save next to picker path
-                            std::string icon_path = picker_path_ + "/" + e.name + ".png";
-                            export_icon_png(icon_path, e, ctx_hfs_path);
+                            picker_mode_ = PickerMode::EXPORT_ICON;
+                            picker_refresh();
+                        }
+                    }
+
+                    // Fix-A-Fork: detect and set type/creator for files missing it
+                    bool has_tc = (e.type[0] && strcmp(e.type, "????") != 0 &&
+                                   strcmp(e.type, "\0\0\0\0") != 0);
+                    if (!has_tc) {
+                        if (ImGui::MenuItem("Fix-A-Fork")) {
+                            TypeCreatorResult tcr = {};
+                            bool found = false;
+
+                            // Try magic bytes from data fork
+                            if (e.size > 0) {
+                                uint8_t* data = nullptr;
+                                size_t dsize = 0;
+                                int rc = -1;
+                                if (vol_type_ == VolumeType::HFS) {
+                                    hfsfile* hf = hfs_open(vol_, ctx_hfs_path.c_str());
+                                    if (hf) {
+                                        uint8_t mbuf[1024];
+                                        unsigned long nr = hfs_read(hf, mbuf, sizeof(mbuf));
+                                        hfs_close(hf);
+                                        if (nr > 0)
+                                            found = detect_type_creator_magic(mbuf, nr, &tcr);
+                                    }
+                                } else if (vol_type_ == VolumeType::HFSPLUS) {
+                                    // Read just enough for magic detection
+                                    rc = hfsplus_read_file_by_cnid(hfsplus_vol_,
+                                            (uint32_t)e.cnid, (uint32_t)e.parent_cnid,
+                                            &data, &dsize, 0);
+                                    if (rc == 0 && data && dsize > 0) {
+                                        size_t check = dsize > 1024 ? 1024 : dsize;
+                                        found = detect_type_creator_magic(data, check, &tcr);
+                                        free(data);
+                                    }
+                                }
+                            }
+
+                            // Fall back to extension
+                            if (!found)
+                                found = detect_type_creator_ext(e.name.c_str(), &tcr);
+
+                            if (found) {
+                                if (vol_type_ == VolumeType::HFS) {
+                                    hfsdirent ent;
+                                    if (hfs_stat(vol_, ctx_hfs_path.c_str(), &ent) == 0) {
+                                        memcpy(ent.u.file.type, tcr.type, 5);
+                                        memcpy(ent.u.file.creator, tcr.creator, 5);
+                                        hfs_setattr(vol_, ctx_hfs_path.c_str(), &ent);
+                                    }
+                                } else if (vol_type_ == VolumeType::HFSPLUS) {
+                                    hfsplus_set_type_creator(hfsplus_vol_, ctx_hfs_path.c_str(),
+                                                             tcr.type, tcr.creator);
+                                }
+                                // Update the displayed entry
+                                entries_[i].type[0] = tcr.type[0]; entries_[i].type[1] = tcr.type[1];
+                                entries_[i].type[2] = tcr.type[2]; entries_[i].type[3] = tcr.type[3];
+                                entries_[i].type[4] = '\0';
+                                entries_[i].creator[0] = tcr.creator[0]; entries_[i].creator[1] = tcr.creator[1];
+                                entries_[i].creator[2] = tcr.creator[2]; entries_[i].creator[3] = tcr.creator[3];
+                                entries_[i].creator[4] = '\0';
+                                status_text_ = "Fixed: " + e.name + " → " + tcr.type + "/" + tcr.creator;
+                            } else {
+                                status_text_ = "Could not detect type/creator for " + e.name;
+                            }
                         }
                     }
 
@@ -1523,10 +1585,14 @@ void App::render_file_picker() {
 
     const char* title = "Open HFS Image";
     if (picker_mode_ == PickerMode::EXPORT_FILE || picker_mode_ == PickerMode::EXPORT_BINHEX ||
-        picker_mode_ == PickerMode::EXPORT_FOLDER_BINHEX)
+        picker_mode_ == PickerMode::EXPORT_FOLDER_BINHEX || picker_mode_ == PickerMode::EXPORT_ICON)
         title = "Save To";
     else if (picker_mode_ == PickerMode::IMPORT_FILE) title = "Select File to Import";
 
+    if (!ImGui::IsPopupOpen(title)) {
+        // Re-refresh entries when the popup is about to open for the first time
+        picker_refresh();
+    }
     ImGui::OpenPopup(title);
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -1626,6 +1692,15 @@ void App::render_file_picker() {
                                 show_progress_ = false;
                                 status_text_ = "Exported folder as BinHex: " + e.name;
                             }
+                        } else if (mode == PickerMode::EXPORT_ICON) {
+                            if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
+                                const HFSEntry& e = entries_[selected_entry_];
+                                std::string hfs_path = current_path_ + e.name;
+                                std::string out = full;
+                                if (fs::is_directory(full))
+                                    out = full + "/" + e.name + ".png";
+                                export_icon_png(out, e, hfs_path);
+                            }
                         }
                         return;
                     }
@@ -1672,6 +1747,15 @@ void App::render_file_picker() {
                         show_progress_ = false;
                         status_text_ = "Exported folder as BinHex: " + e.name;
                     }
+                } else if (mode == PickerMode::EXPORT_ICON) {
+                    if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
+                        const HFSEntry& e = entries_[selected_entry_];
+                        std::string hfs_path = current_path_ + e.name;
+                        std::string out = selected;
+                        if (fs::is_directory(selected))
+                            out = selected + "/" + e.name + ".png";
+                        export_icon_png(out, e, hfs_path);
+                    }
                 }
             }
             return;
@@ -1698,9 +1782,10 @@ void App::picker_refresh() {
         if (name.empty() || name == "." || name == "..") continue;
         if (!picker_show_hidden_ && name[0] == '.') continue;
 
-        if (entry.is_directory(ec)) {
+        std::error_code ec2;
+        if (entry.is_directory(ec2)) {
             dirs.push_back(name + "/");
-        } else {
+        } else if (!ec2) {
             files.push_back(name);
         }
     }

@@ -182,7 +182,7 @@ private:
     char edit_creator_[5] = {};
 
     // File picker state
-    enum class PickerMode { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX, EXPORT_FOLDER_BINHEX, IMPORT_FILE, IMPORT_FOLDER };
+    enum class PickerMode { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX, EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE, IMPORT_FOLDER };
     PickerMode picker_mode_ = PickerMode::NONE;
     std::string picker_path_;
     char picker_input_[1024] = {};

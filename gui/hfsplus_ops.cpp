@@ -138,40 +138,39 @@ static std::string mac_to_unix_path(const char* mac_path, const char* vol_name) 
 }
 
 // --- Get volume name from catalog root folder ---
+//
+// The volume name in HFS+ is stored in the catalog B-tree as the nodeName
+// in the thread record for the root folder (CNID 2). To find it:
+//   1. Search catalog for key (parentID=2, nodeName.length=0) → thread record
+//   2. The thread record's nodeName IS the volume name
+//
+// We can't use getRecordByCNID() because it does TWO searches — it finds the
+// thread record, extracts the key, then searches again for the actual folder
+// record and returns THAT, discarding the thread with the name.
 
 static void get_volume_name(Volume* volume, char* out, size_t out_size) {
     out[0] = '\0';
-    CatalogRecordList* list = getFolderContents(kHFSRootFolderID, volume);
-    (void)list; // We don't actually need folder contents for the name
 
-    // The volume name is stored in the root folder's thread record
-    HFSPlusCatalogRecord* rec = getRecordByCNID(kHFSRootFolderID, volume);
-    if (rec) {
-        free(rec);
-    }
+    // Search catalog B-tree directly for the root folder's thread record
+    HFSPlusCatalogKey key;
+    key.keyLength = sizeof(key.parentID) + sizeof(key.nodeName.length);
+    key.parentID = kHFSRootFolderID;  // CNID 2
+    key.nodeName.length = 0;
 
-    // Alternative: read the catalog thread for the root folder to get the name
-    // The simplest approach: list root and extract from the catalog key
-    // Actually, let's use getRecordFromPath to get root folder info
-    HFSPlusCatalogRecord* root = getRecordFromPath("/", volume, NULL, NULL);
-    if (root && root->recordType == kHFSPlusFolderRecord) {
-        // The volume name in HFS+ is stored in the catalog B-tree
-        // We can get it from the root parent thread record
-        HFSPlusCatalogRecord* thread = getRecordByCNID(kHFSRootFolderID, volume);
-        if (thread && thread->recordType == kHFSPlusFolderThreadRecord) {
-            HFSPlusCatalogThread* t = (HFSPlusCatalogThread*)thread;
-            char* name = unicodeToAscii(&t->nodeName);
-            if (name) {
-                snprintf(out, out_size, "%s", name);
-                free(name);
-            }
-            free(thread);
-        } else if (thread) {
-            free(thread);
+    int exact = 0;
+    HFSPlusCatalogThread* thread = (HFSPlusCatalogThread*)
+        search(volume->catalogTree, (BTKey*)(&key), &exact, NULL, NULL);
+
+    if (thread && exact) {
+        // thread->nodeName contains the volume name in Unicode
+        char* name = unicodeToAscii(&thread->nodeName);
+        if (name && name[0] != '\0') {
+            snprintf(out, out_size, "%s", name);
+            free(name);
         }
-        free(root);
-    } else if (root) {
-        free(root);
+        free(thread);
+    } else {
+        free(thread);
     }
 
     if (out[0] == '\0')

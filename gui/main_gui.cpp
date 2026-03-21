@@ -167,8 +167,13 @@ int main(int, char**) {
                 event.window.windowID == SDL_GetWindowID(window))
                 done = true;
             if (event.type == SDL_DROPFILE) {
-                if (app.has_volume()) {
-                    // Volume is open — import the dropped file
+                // Check if this looks like a disk image — open it instead of importing
+                const char* ext = strrchr(event.drop.file, '.');
+                bool is_image = ext && strcasecmp(ext, ".hda") == 0;
+
+                if (is_image) {
+                    app.open_image(event.drop.file);
+                } else if (app.has_volume()) {
                     app.import_file(event.drop.file);
                 } else {
                     app.open_image(event.drop.file);
