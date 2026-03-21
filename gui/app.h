@@ -67,6 +67,7 @@ private:
     void render_file_picker();
     void render_type_creator_popup();
     void render_info_popup();
+    void render_rename_popup();
     void render_progress_bar();
 
     // HFS operations
@@ -179,6 +180,9 @@ private:
 
     bool show_mkdir_ = false;
     char mkdir_name_[32] = {};
+
+    bool show_rename_ = false;
+    char rename_buf_[256] = {};
 
     bool show_type_creator_ = false;
     char edit_type_[5] = {};

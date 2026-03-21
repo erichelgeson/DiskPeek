@@ -710,6 +710,22 @@ int hfsplus_mkdir(HFSPlusVolume* vol, const char* path) {
     return (cnid != 0) ? 0 : -1;
 }
 
+int hfsplus_rename(HFSPlusVolume* vol, const char* old_path, const char* new_path) {
+    if (!vol || !vol->volume || vol->readonly) return -1;
+
+    std::string old_unix = mac_to_unix_path(old_path, vol->vol_name);
+    std::string new_unix = mac_to_unix_path(new_path, vol->vol_name);
+
+    PANIC_PROTECT_BEGIN()
+        return -1;
+    PANIC_PROTECT_END()
+
+    int ret = move(old_unix.c_str(), new_unix.c_str(), vol->volume);
+    s_panic_armed = false;
+
+    return ret ? 0 : -1;
+}
+
 uint32_t hfsplus_get_blessed(HFSPlusVolume* vol) {
     if (!vol || !vol->volume) return 0;
     // finderInfo[0] = blessed system folder CNID

@@ -1153,6 +1153,7 @@ void App::render() {
     render_mkdir_popup();
     render_type_creator_popup();
     render_info_popup();
+    render_rename_popup();
     render_file_picker();
 
     ImGui::End();
@@ -1508,12 +1509,17 @@ void App::render_file_list() {
                     memcpy(info_creator_, e.creator, 5);
                     show_info_ = true;
                 }
+                if (ImGui::MenuItem("Rename")) {
+                    snprintf(rename_buf_, sizeof(rename_buf_), "%s", e.name.c_str());
+                    show_rename_ = true;
+                }
                 if (ImGui::MenuItem("Delete")) {
                     confirm_text_ = "Delete \"" + e.name + "\"?";
                     confirm_target_ = ctx_hfs_path;
                     confirm_is_dir_ = e.is_dir;
                     show_confirm_ = true;
                 }
+                ImGui::Separator();
                 if (ImGui::MenuItem("New Folder")) {
                     memset(mkdir_name_, 0, sizeof(mkdir_name_));
                     show_mkdir_ = true;
@@ -1763,6 +1769,61 @@ void App::render_type_creator_popup() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             show_type_creator_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void App::render_rename_popup() {
+    if (show_rename_)
+        ImGui::OpenPopup("Rename");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("Rename", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (selected_entry_ < 0 || selected_entry_ >= (int)entries_.size()) {
+            show_rename_ = false;
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+
+        HFSEntry& e = entries_[selected_entry_];
+        ImGui::Text("Rename: %s", e.name.c_str());
+        ImGui::Text("New name:");
+        bool enter = ImGui::InputText("##rename", rename_buf_, sizeof(rename_buf_),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+
+        if (enter || ImGui::Button("Rename", ImVec2(100, 0))) {
+            std::string new_name = rename_buf_;
+            if (!new_name.empty() && new_name != e.name) {
+                std::string old_path = current_path_ + e.name;
+                std::string new_path = current_path_ + new_name;
+                int rc = -1;
+
+                if (vol_type_ == VolumeType::HFS) {
+                    rc = hfs_rename(vol_, old_path.c_str(), new_path.c_str());
+                    if (rc == -1)
+                        set_error(std::string("Rename failed: ") + (hfs_error ? hfs_error : "unknown"));
+                } else if (vol_type_ == VolumeType::HFSPLUS) {
+                    rc = hfsplus_rename(hfsplus_vol_, old_path.c_str(), new_path.c_str());
+                    if (rc != 0)
+                        set_error("Rename failed on HFS+ volume");
+                }
+
+                if (rc == 0) {
+                    status_text_ = "Renamed: " + e.name + " → " + new_name;
+                    refresh_listing();
+                }
+            }
+            show_rename_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            show_rename_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

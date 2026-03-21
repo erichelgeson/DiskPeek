@@ -81,6 +81,10 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
 uint32_t hfsplus_get_blessed(HFSPlusVolume* vol);
 int hfsplus_set_blessed(HFSPlusVolume* vol, uint32_t folder_cnid);
 
+// Rename/move a file or folder. Both paths are Mac-style (colon-separated).
+// Returns 0 on success, -1 on failure.
+int hfsplus_rename(HFSPlusVolume* vol, const char* old_path, const char* new_path);
+
 // Set type and creator codes on a file.
 // type and creator must be exactly 4 bytes each.
 // Returns 0 on success, -1 on failure.
