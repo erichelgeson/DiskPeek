@@ -10,12 +10,12 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdio>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <unistd.h>
 #include <cerrno>
-#include <sys/statvfs.h>
+#include <filesystem>
+
+#include "platform.h"
+
+namespace fs = std::filesystem;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wregister"
@@ -1514,9 +1514,10 @@ void App::render_file_picker() {
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##path", picker_input_, sizeof(picker_input_),
                 ImGuiInputTextFlags_EnterReturnsTrue)) {
-            struct stat st;
-            if (stat(picker_input_, &st) == 0) {
-                if (S_ISDIR(st.st_mode)) {
+            std::error_code ec2;
+            auto fstatus = fs::status(picker_input_, ec2);
+            if (!ec2) {
+                if (fs::is_directory(fstatus)) {
                     picker_navigate(picker_input_);
                 } else {
                     std::string selected = picker_input_;
@@ -1582,8 +1583,7 @@ void App::render_file_picker() {
                                 const HFSEntry& e = entries_[selected_entry_];
                                 std::string hfs_path = current_path_ + e.name;
                                 std::string out = full;
-                                struct stat st2;
-                                if (stat(full.c_str(), &st2) == 0 && S_ISDIR(st2.st_mode))
+                                if (fs::is_directory(full))
                                     out = full + "/" + e.name + ".hqx";
                                 export_as_binhex(out, e, hfs_path);
                             }
@@ -1594,8 +1594,7 @@ void App::render_file_picker() {
                                 std::string host_name = (vol_type_ == VolumeType::HFS)
                                     ? macroman_to_utf8(e.name) : e.name;
                                 std::string dest = full;
-                                struct stat st2;
-                                if (stat(full.c_str(), &st2) == 0 && S_ISDIR(st2.st_mode))
+                                if (fs::is_directory(full))
                                     dest = full + "/" + host_name;
                                 show_progress_ = true;
                                 export_folder_binhex(hfs_path, dest, e.cnid);
@@ -1630,8 +1629,7 @@ void App::render_file_picker() {
                         const HFSEntry& e = entries_[selected_entry_];
                         std::string hfs_path = current_path_ + e.name;
                         std::string out = selected;
-                        struct stat st2;
-                        if (stat(selected.c_str(), &st2) == 0 && S_ISDIR(st2.st_mode))
+                        if (fs::is_directory(selected))
                             out = selected + "/" + e.name + ".hqx";
                         export_as_binhex(out, e, hfs_path);
                     }
@@ -1642,8 +1640,7 @@ void App::render_file_picker() {
                         std::string host_name = (vol_type_ == VolumeType::HFS)
                             ? macroman_to_utf8(e.name) : e.name;
                         std::string dest = selected;
-                        struct stat st2;
-                        if (stat(selected.c_str(), &st2) == 0 && S_ISDIR(st2.st_mode))
+                        if (fs::is_directory(selected))
                             dest = selected + "/" + host_name;
                         show_progress_ = true;
                         export_folder_binhex(hfs_path, dest);
@@ -1668,28 +1665,20 @@ void App::picker_refresh() {
     picker_entries_.clear();
     picker_selected_ = -1;
 
-    DIR* d = opendir(picker_path_.c_str());
-    if (!d) return;
-
+    std::error_code ec;
     std::vector<std::string> dirs, files;
-    struct dirent* de;
-    while ((de = readdir(d)) != nullptr) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
-            continue;
-        if (!picker_show_hidden_ && de->d_name[0] == '.')
-            continue;
+    for (const auto& entry : fs::directory_iterator(picker_path_, ec)) {
+        if (ec) break;
+        std::string name = entry.path().filename().string();
+        if (name.empty() || name == "." || name == "..") continue;
+        if (!picker_show_hidden_ && name[0] == '.') continue;
 
-        std::string full = picker_path_ + "/" + de->d_name;
-        struct stat st;
-        if (stat(full.c_str(), &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            dirs.push_back(std::string(de->d_name) + "/");
+        if (entry.is_directory(ec)) {
+            dirs.push_back(name + "/");
         } else {
-            files.push_back(de->d_name);
+            files.push_back(name);
         }
     }
-    closedir(d);
 
     std::sort(dirs.begin(), dirs.end());
     std::sort(files.begin(), files.end());
@@ -1832,14 +1821,11 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
 
     // Check host disk free space
     if (e.size > 0) {
-        struct statvfs vfs;
-        if (statvfs(host_dir.c_str(), &vfs) == 0) {
-            uint64_t host_free = (uint64_t)vfs.f_bavail * vfs.f_frsize;
-            if ((uint64_t)e.size > host_free) {
-                set_error("Not enough disk space: need " + format_size(e.size) +
-                          ", free " + format_size((unsigned long)host_free));
-                return;
-            }
+        uint64_t host_free = platform_free_space(host_dir.c_str());
+        if (host_free > 0 && (uint64_t)e.size > host_free) {
+            set_error("Not enough disk space: need " + format_size(e.size) +
+                      ", free " + format_size((unsigned long)host_free));
+            return;
         }
     }
 
@@ -1911,7 +1897,7 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
 // Recursively export a folder from the image to a host directory
 void App::export_folder(const std::string& hfs_dir_path, const std::string& host_dir,
                         unsigned long folder_cnid) {
-    mkdir(host_dir.c_str(), 0755);
+    platform_mkdir(host_dir.c_str());
 
     if (vol_type_ == VolumeType::HFS) {
         hfsdir* dir = hfs_opendir(vol_, hfs_dir_path.c_str());
@@ -1975,7 +1961,7 @@ void App::export_folder(const std::string& hfs_dir_path, const std::string& host
 // Recursively export a folder, encoding every file as BinHex
 void App::export_folder_binhex(const std::string& hfs_dir_path, const std::string& host_dir,
                                unsigned long folder_cnid) {
-    mkdir(host_dir.c_str(), 0755);
+    platform_mkdir(host_dir.c_str());
 
     if (vol_type_ == VolumeType::HFS) {
         hfsdir* dir = hfs_opendir(vol_, hfs_dir_path.c_str());
@@ -2044,16 +2030,11 @@ void App::export_folder_binhex(const std::string& hfs_dir_path, const std::strin
 
 // Recursively import a host directory into the current HFS directory
 void App::import_host_dir(const std::string& host_dir) {
-    DIR* d = opendir(host_dir.c_str());
-    if (!d) return;
+    std::error_code ec;
+    if (!fs::is_directory(host_dir, ec)) return;
 
     // Get directory name and sanitize for the target filesystem
-    std::string raw_dirname;
-    size_t slash = host_dir.rfind('/');
-    if (slash != std::string::npos)
-        raw_dirname = host_dir.substr(slash + 1);
-    else
-        raw_dirname = host_dir;
+    std::string raw_dirname = fs::path(host_dir).filename().string();
 
     std::string dirname;
     if (vol_type_ == VolumeType::HFS)
@@ -2074,22 +2055,17 @@ void App::import_host_dir(const std::string& host_dir) {
     if (vol_type_ == VolumeType::HFS)
         hfs_chdir(vol_, current_path_.c_str());
 
-    struct dirent* de;
-    while ((de = readdir(d)) != nullptr) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-        if (de->d_name[0] == '.') continue; // Skip hidden/AppleDouble files
+    for (const auto& entry : fs::directory_iterator(host_dir, ec)) {
+        if (ec) break;
+        std::string name = entry.path().filename().string();
+        if (name.empty() || name[0] == '.') continue; // Skip hidden/AppleDouble files
 
-        std::string full = host_dir + "/" + de->d_name;
-        struct stat st;
-        if (stat(full.c_str(), &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            import_host_dir(full);
-        } else if (S_ISREG(st.st_mode)) {
-            copy_to_hfs_impl(full);
+        if (entry.is_directory(ec)) {
+            import_host_dir(entry.path().string());
+        } else if (entry.is_regular_file(ec)) {
+            copy_to_hfs_impl(entry.path().string());
         }
     }
-    closedir(d);
 
     // Restore path
     current_path_ = saved_path;
@@ -2105,8 +2081,7 @@ void App::copy_from_hfs_impl(const std::string& host_path) {
 
     // Determine output directory
     std::string out_dir = host_path;
-    struct stat st;
-    if (stat(host_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (!fs::is_directory(host_path)) {
         size_t slash = host_path.rfind('/');
         if (slash != std::string::npos)
             out_dir = host_path.substr(0, slash);
@@ -2144,8 +2119,7 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
     progress_text_ = host_path;
 
     // Check if this is a directory — import recursively
-    struct stat path_st;
-    if (stat(host_path.c_str(), &path_st) == 0 && S_ISDIR(path_st.st_mode)) {
+    if (fs::is_directory(host_path)) {
         import_host_dir(host_path);
         show_progress_ = false;
         refresh_listing();
@@ -2171,9 +2145,10 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
 
     // Check volume free space before writing
     {
-        struct stat file_st;
-        if (stat(host_path.c_str(), &file_st) == 0 && S_ISREG(file_st.st_mode)) {
-            unsigned long need = (unsigned long)file_st.st_size;
+        std::error_code ec3;
+        auto fsize = fs::file_size(host_path, ec3);
+        if (!ec3 && fsize > 0) {
+            unsigned long need = (unsigned long)fsize;
             if (need > vol_free_bytes_) {
                 show_progress_ = false;
                 set_error("Not enough space on image: need " + format_size(need) +

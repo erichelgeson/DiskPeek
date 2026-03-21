@@ -10,9 +10,14 @@ project('hfsbrowser', 'c', 'cpp',
 
 cc = meson.get_compiler('c')
 
-# libhfs sources
-libhfs_src = files(
-  'libhfs/os/unix.c',
+# libhfs sources — select OS abstraction layer per platform
+if host_machine.system() == 'windows'
+  libhfs_os_src = files('libhfs/os/win32.c')
+else
+  libhfs_os_src = files('libhfs/os/unix.c')
+endif
+
+libhfs_src = libhfs_os_src + files(
   'libhfs/data.c',
   'libhfs/block.c',
   'libhfs/low.c',
@@ -31,7 +36,9 @@ libhfs_inc = include_directories('libhfs')
 # Generate config.h for libhfs (replaces autoconf)
 libhfs_config = configuration_data()
 libhfs_config.set('HAVE_FCNTL_H', 1)
-libhfs_config.set('HAVE_UNISTD_H', 1)
+if host_machine.system() != 'windows'
+  libhfs_config.set('HAVE_UNISTD_H', 1)
+endif
 libhfs_config.set('HAVE_MKTIME', 1)
 libhfs_config.set('HAVE_STDINT_H', 1)
 libhfs_config.set('HAVE_INTTYPES_H', 1)
@@ -77,18 +84,23 @@ libdmg_hfsplus_src = files(
   'lib/libdmg-hfsplus/hfs/endian_init.c',
 )
 
-libdmg_hfsplus = static_library('dmg-hfsplus',
-  libdmg_hfsplus_src,
-  include_directories : libdmg_hfsplus_inc,
-  dependencies : zlib_dep,
-  c_args : [
+libdmg_hfsplus_c_args = []
+if cc.get_id() != 'msvc'
+  libdmg_hfsplus_c_args += [
     '-D_GNU_SOURCE',
     '-Wno-unused-parameter',
     '-Wno-sign-compare',
     '-Wno-address-of-packed-member',
     '-Wno-maybe-uninitialized',
     '-Wno-unused-but-set-variable',
-  ],
+  ]
+endif
+
+libdmg_hfsplus = static_library('dmg-hfsplus',
+  libdmg_hfsplus_src,
+  include_directories : libdmg_hfsplus_inc,
+  dependencies : zlib_dep,
+  c_args : libdmg_hfsplus_c_args,
 )
 
 # GUI application
@@ -125,10 +137,15 @@ imgui_sources = files(
   'lib/imgui/backends/imgui_impl_opengl3.cpp',
 )
 
+binhex_c_args = ['-DHAVE_CONFIG_H']
+if cc.get_id() != 'msvc'
+  binhex_c_args += ['-D_GNU_SOURCE']
+endif
+
 binhex_lib = static_library('binhex',
   files('binhex.c', 'crc.c'),
   include_directories : [libhfs_inc],
-  c_args : ['-DHAVE_CONFIG_H', '-D_GNU_SOURCE'],
+  c_args : binhex_c_args,
 )
 
 gui_sources = files(

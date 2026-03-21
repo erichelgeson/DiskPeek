@@ -5,8 +5,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-
 #include "common.h"
+
+/* Cross-platform struct packing */
+#ifdef _MSC_VER
+#  pragma pack(push, 1)
+#  define ATTRIBUTE_PACKED
+#else
+#  define ATTRIBUTE_PACKED __attribute__((__packed__))
+#endif
 
 #define READ(a, b, c, d) ((*((a)->read))(a, b, c, d))
 #define WRITE(a, b, c, d) ((*((a)->write))(a, b, c, d))
@@ -19,7 +26,7 @@
 struct BTKey {
   uint16_t keyLength;
   unsigned char data[0];
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 
 typedef struct BTKey BTKey;
 
@@ -51,14 +58,14 @@ enum {
 struct HFSUniStr255 {
     uint16_t  length;
     uint16_t unicode[255];
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSUniStr255 HFSUniStr255;
 typedef const  HFSUniStr255 *ConstHFSUniStr255Param;
 
 struct HFSPlusExtentDescriptor {
     uint32_t startBlock;
     uint32_t blockCount;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusExtentDescriptor HFSPlusExtentDescriptor;
 
 typedef HFSPlusExtentDescriptor HFSPlusExtentRecord[8];
@@ -68,7 +75,7 @@ struct HFSPlusForkData {
   uint32_t clumpSize;
   uint32_t totalBlocks;
   HFSPlusExtentRecord extents;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusForkData HFSPlusForkData;
  
 struct HFSPlusVolumeHeader {
@@ -105,7 +112,7 @@ struct HFSPlusVolumeHeader {
   HFSPlusForkData catalogFile;
   HFSPlusForkData attributesFile;
   HFSPlusForkData startupFile;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusVolumeHeader HFSPlusVolumeHeader;
 
 enum {
@@ -122,7 +129,7 @@ struct BTNodeDescriptor {
     uint8_t     height;
     uint16_t    numRecords;
     uint16_t    reserved;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct BTNodeDescriptor BTNodeDescriptor;
 
 #define kHFSCaseFolding 0xCF
@@ -144,7 +151,7 @@ struct BTHeaderRec {
     uint8_t     keyCompareType;
     uint32_t    attributes;     // long aligned again
     uint32_t    reserved3[16];
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct BTHeaderRec BTHeaderRec;
 
 struct HFSPlusExtentKey {
@@ -153,21 +160,21 @@ struct HFSPlusExtentKey {
     uint8_t               pad;
     HFSCatalogNodeID    fileID;
     uint32_t              startBlock;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusExtentKey HFSPlusExtentKey;
 
 struct HFSPlusCatalogKey {
     uint16_t              keyLength;
     HFSCatalogNodeID    parentID;
     HFSUniStr255        nodeName;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusCatalogKey HFSPlusCatalogKey;
 
 #ifndef __MACTYPES__
 struct Point {
   int16_t              v;
   int16_t              h;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct Point  Point;
 
 struct Rect {
@@ -175,7 +182,7 @@ struct Rect {
   int16_t              left;
   int16_t              bottom;
   int16_t              right;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct Rect   Rect;
 
 /* OSType is a 32-bit value made by packing four 1-byte characters 
@@ -232,7 +239,7 @@ struct FileInfo {
   uint16_t    finderFlags;
   Point     location;           /* File's location in the folder. */
   uint16_t    reservedField;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct FileInfo   FileInfo;
 
 struct ExtendedFileInfo {
@@ -240,7 +247,7 @@ struct ExtendedFileInfo {
   uint16_t    extendedFinderFlags;
   int16_t    reserved2;
   int32_t    putAwayFolderID;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct ExtendedFileInfo   ExtendedFileInfo;
 
 struct FolderInfo {
@@ -251,7 +258,7 @@ struct FolderInfo {
                                 /* folder. If set to {0, 0}, the Finder */
                                 /* will place the item automatically */
   uint16_t    reservedField;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct FolderInfo   FolderInfo;
 
 struct ExtendedFolderInfo {
@@ -260,7 +267,7 @@ struct ExtendedFolderInfo {
   uint16_t    extendedFinderFlags;
   int16_t    reserved2;
   int32_t    putAwayFolderID;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct ExtendedFolderInfo   ExtendedFolderInfo;
 
 #ifndef _STAT_H_
@@ -309,7 +316,7 @@ struct HFSPlusBSDInfo {
         uint32_t  linkCount;
         uint32_t  rawDevice;
     } special;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusBSDInfo HFSPlusBSDInfo;
 
 enum {
@@ -357,7 +364,7 @@ struct HFSPlusCatalogFolder {
     ExtendedFolderInfo  finderInfo;
     uint32_t              textEncoding;
     uint32_t              folderCount;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusCatalogFolder HFSPlusCatalogFolder;
 
 struct HFSPlusCatalogFile {
@@ -378,7 +385,7 @@ struct HFSPlusCatalogFile {
  
     HFSPlusForkData     dataFork;
     HFSPlusForkData     resourceFork;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusCatalogFile HFSPlusCatalogFile;
 
 struct HFSPlusCatalogThread {
@@ -386,7 +393,7 @@ struct HFSPlusCatalogThread {
     int16_t              reserved;
     HFSCatalogNodeID    parentID;
     HFSUniStr255        nodeName;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusCatalogThread HFSPlusCatalogThread;
 
 enum {
@@ -399,7 +406,7 @@ struct HFSPlusAttrForkData {
 	uint32_t 	recordType;
 	uint32_t 	reserved;
 	HFSPlusForkData theFork;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusAttrForkData HFSPlusAttrForkData;
 
 struct HFSPlusAttrExtents {
@@ -414,7 +421,7 @@ struct HFSPlusAttrData {
 	uint32_t    reserved[2];
 	uint32_t    size;
 	uint8_t     data[0];
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusAttrData HFSPlusAttrData;
 
 union HFSPlusAttrRecord {
@@ -431,7 +438,7 @@ struct HFSPlusAttrKey {
 	uint32_t     fileID;
 	uint32_t     startBlock;
 	HFSUniStr255 name;
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusAttrKey HFSPlusAttrKey;
 
 enum {
@@ -444,7 +451,7 @@ enum {
 struct HFSPlusCatalogRecord {
   int16_t recordType;
   unsigned char data[0];
-} __attribute__((__packed__));
+} ATTRIBUTE_PACKED;
 typedef struct HFSPlusCatalogRecord HFSPlusCatalogRecord;
 
 struct CatalogRecordList {
@@ -581,6 +588,12 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef _MSC_VER
+#  pragma pack(pop)
+#endif
+
+#undef ATTRIBUTE_PACKED
 
 #endif
 

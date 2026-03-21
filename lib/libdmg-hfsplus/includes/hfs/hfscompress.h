@@ -4,6 +4,13 @@
 #include <stdint.h>
 #include "common.h"
 
+#ifdef _MSC_VER
+#  pragma pack(push, 1)
+#  define ATTRIBUTE_PACKED_CMP
+#else
+#  define ATTRIBUTE_PACKED_CMP __attribute__ ((packed))
+#endif
+
 #define CMPFS_MAGIC 0x636D7066
 
 typedef struct HFSPlusDecmpfs {
@@ -11,25 +18,25 @@ typedef struct HFSPlusDecmpfs {
 	uint32_t flags;
 	uint64_t size;
 	uint8_t data[0];
-} __attribute__ ((packed)) HFSPlusDecmpfs;
+} ATTRIBUTE_PACKED_CMP HFSPlusDecmpfs;
 
 typedef struct HFSPlusCmpfRsrcHead {
 	uint32_t headerSize;
 	uint32_t totalSize;
 	uint32_t dataSize;
 	uint32_t flags;
-} __attribute__ ((packed)) HFSPlusCmpfRsrcHead;
+} ATTRIBUTE_PACKED_CMP HFSPlusCmpfRsrcHead;
 
 typedef struct HFSPlusCmpfRsrcBlock {
 	uint32_t offset;
 	uint32_t size;
-} __attribute__ ((packed)) HFSPlusCmpfRsrcBlock;
+} ATTRIBUTE_PACKED_CMP HFSPlusCmpfRsrcBlock;
 
 typedef struct HFSPlusCmpfRsrcBlockHead {
 	uint32_t dataSize;
 	uint32_t numBlocks;
 	HFSPlusCmpfRsrcBlock blocks[0];
-} __attribute__ ((packed)) HFSPlusCmpfRsrcBlockHead;
+} ATTRIBUTE_PACKED_CMP HFSPlusCmpfRsrcBlockHead;
 
 typedef struct HFSPlusCmpfEnd {
 	uint32_t pad[6];
@@ -40,7 +47,7 @@ typedef struct HFSPlusCmpfEnd {
 	uint32_t flags;
 	uint64_t size;
 	uint32_t unk4;
-} __attribute__ ((packed)) HFSPlusCmpfEnd;
+} ATTRIBUTE_PACKED_CMP HFSPlusCmpfEnd;
 
 typedef struct HFSPlusCompressed {
 	Volume* volume;
@@ -67,5 +74,10 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef _MSC_VER
+#  pragma pack(pop)
+#endif
+#undef ATTRIBUTE_PACKED_CMP
 
 #endif

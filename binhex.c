@@ -26,7 +26,14 @@
 # ifdef HAVE_UNISTD_H
 #  include <unistd.h>
 # else
+#  ifdef _WIN32
+#   include <io.h>
+#   define dup _dup
+#   define fdopen _fdopen
+#   define close _close
+#  else
 int dup(int);
+#  endif
 # endif
 
 # include <stdio.h>
@@ -38,7 +45,7 @@ int dup(int);
 
 const char *bh_error = "no error";
 
-extern int errno;
+/* errno is provided by <errno.h> on all modern platforms */
 
 # define ERROR(code, str)	(bh_error = (str), errno = (code))
 
