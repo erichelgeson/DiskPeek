@@ -1641,11 +1641,29 @@ void App::render_action_bar() {
         if (has_vol) refresh_listing();
     }
 
-    ImGui::SameLine();
-    if (!cut_path_.empty()) {
-        ImGui::TextDisabled("Cut: %s (right-click to paste)", cut_name_.c_str());
-    } else {
-        ImGui::TextDisabled("(right-click for more options)");
+    if (!cut_path_.empty() && has_vol) {
+        ImGui::SameLine();
+        if (ImGui::Button("Paste")) {
+            std::string dest = current_path_ + cut_name_;
+            int rc = -1;
+            if (vol_type_ == VolumeType::HFS) {
+                rc = hfs_rename(vol_, cut_path_.c_str(), dest.c_str());
+                if (rc == -1)
+                    set_error(std::string("Move failed: ") + (hfs_error ? hfs_error : "unknown"));
+            } else if (vol_type_ == VolumeType::HFSPLUS) {
+                rc = hfsplus_rename(hfsplus_vol_, cut_path_.c_str(), dest.c_str());
+                if (rc != 0)
+                    set_error("Move failed on HFS+ volume");
+            }
+            if (rc == 0) {
+                status_text_ = "Moved: " + cut_name_;
+                cut_path_.clear();
+                cut_name_.clear();
+                refresh_listing();
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", cut_name_.c_str());
     }
 }
 
