@@ -184,6 +184,11 @@ private:
     bool show_rename_ = false;
     char rename_buf_[256] = {};
 
+    // Cut/paste for move operations
+    std::string cut_path_;         // full Mac-style path of cut entry
+    std::string cut_name_;         // display name
+    bool cut_is_dir_ = false;
+
     bool show_type_creator_ = false;
     char edit_type_[5] = {};
     char edit_creator_[5] = {};

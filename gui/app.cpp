@@ -833,6 +833,8 @@ void App::close_image() {
     vol_total_bytes_ = 0;
     vol_free_bytes_ = 0;
     blessed_cnid_ = 0;
+    cut_path_.clear();
+    cut_name_.clear();
     current_path_.clear();
     current_cnid_ = 0;
     cnid_stack_.clear();
@@ -1513,6 +1515,34 @@ void App::render_file_list() {
                     snprintf(rename_buf_, sizeof(rename_buf_), "%s", e.name.c_str());
                     show_rename_ = true;
                 }
+                if (ImGui::MenuItem("Cut")) {
+                    cut_path_ = ctx_hfs_path;
+                    cut_name_ = e.name;
+                    cut_is_dir_ = e.is_dir;
+                    status_text_ = "Cut: " + e.name;
+                }
+                if (!cut_path_.empty()) {
+                    if (ImGui::MenuItem("Paste Here")) {
+                        std::string dest = current_path_ + cut_name_;
+                        int rc = -1;
+                        if (vol_type_ == VolumeType::HFS) {
+                            rc = hfs_rename(vol_, cut_path_.c_str(), dest.c_str());
+                            if (rc == -1)
+                                set_error(std::string("Move failed: ") + (hfs_error ? hfs_error : "unknown"));
+                        } else if (vol_type_ == VolumeType::HFSPLUS) {
+                            rc = hfsplus_rename(hfsplus_vol_, cut_path_.c_str(), dest.c_str());
+                            if (rc != 0)
+                                set_error("Move failed on HFS+ volume");
+                        }
+                        if (rc == 0) {
+                            status_text_ = "Moved: " + cut_name_;
+                            cut_path_.clear();
+                            cut_name_.clear();
+                            refresh_listing();
+                        }
+                    }
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Delete")) {
                     confirm_text_ = "Delete \"" + e.name + "\"?";
                     confirm_target_ = ctx_hfs_path;
@@ -1612,7 +1642,11 @@ void App::render_action_bar() {
     }
 
     ImGui::SameLine();
-    ImGui::TextDisabled("(right-click for more options)");
+    if (!cut_path_.empty()) {
+        ImGui::TextDisabled("Cut: %s (right-click to paste)", cut_name_.c_str());
+    } else {
+        ImGui::TextDisabled("(right-click for more options)");
+    }
 }
 
 void App::render_progress_bar() {
