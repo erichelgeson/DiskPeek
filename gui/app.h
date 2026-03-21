@@ -161,6 +161,7 @@ private:
     static int read_apm_partitions(const char* path, APMPartition* parts, int max_parts);
 
     // Directory state
+    bool show_hidden_ = false;
     std::string current_path_;
     unsigned long current_cnid_ = 0;  // HFS+ folder CNID for current directory
     std::vector<unsigned long> cnid_stack_;  // HFS+ parent CNID stack for navigate_up

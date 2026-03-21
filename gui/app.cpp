@@ -815,6 +815,8 @@ void App::refresh_listing() {
                 memcpy(e.creator, ent.u.file.creator, 5);
             }
 
+            if (!show_hidden_ && (e.fdflags & 0x4000))
+                continue;
             entries_.push_back(e);
         }
 
@@ -853,6 +855,8 @@ void App::refresh_listing() {
             e.rsize = (unsigned long)plus_entries[i].rsrc_size;
             memcpy(e.type, plus_entries[i].type, 5);
             memcpy(e.creator, plus_entries[i].creator, 5);
+            if (!show_hidden_ && (e.fdflags & 0x4000))
+                continue;
             entries_.push_back(e);
         }
 
@@ -1144,7 +1148,7 @@ void App::render_file_list() {
         }
     }
 
-    if (ImGui::BeginTable("files", 5,
+    if (ImGui::BeginTable("files", 4,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBodyUntilResize)) {
 
@@ -1153,8 +1157,7 @@ void App::render_file_list() {
         ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, icon_sz + 16);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Type/Creator", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-        ImGui::TableSetupColumn("Data Fork", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("Rsrc Fork", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("DF/RF Size", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -1401,16 +1404,11 @@ void App::render_file_list() {
                 ImGui::Text("%s/%s", e.type, e.creator);
             }
 
-            // Data Fork Size
+            // DF/RF Size
             ImGui::TableNextColumn();
             if (!e.is_dir) {
-                ImGui::Text("%s", format_size(e.size).c_str());
-            }
-
-            // Resource Fork Size
-            ImGui::TableNextColumn();
-            if (!e.is_dir && e.rsize > 0) {
-                ImGui::Text("%s", format_size(e.rsize).c_str());
+                ImGui::Text("%s/%s", format_size(e.size).c_str(),
+                            format_size(e.rsize).c_str());
             }
 
             if (is_hidden)
@@ -1477,13 +1475,12 @@ void App::render_action_bar() {
     }
     if (!has_sel) ImGui::EndDisabled();
 
-    ImGui::SameLine();
-
-    if (ImGui::Button("Refresh")) {
-        refresh_listing();
-    }
-
     if (!has_vol) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Show Hidden", &show_hidden_)) {
+        if (has_vol) refresh_listing();
+    }
 
     ImGui::SameLine();
     ImGui::TextDisabled("(right-click for more options)");
