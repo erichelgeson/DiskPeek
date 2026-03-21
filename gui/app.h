@@ -66,6 +66,7 @@ private:
     void render_mkdir_popup();
     void render_file_picker();
     void render_type_creator_popup();
+    void render_info_popup();
     void render_progress_bar();
 
     // HFS operations
@@ -150,6 +151,7 @@ private:
     std::string volume_name_;
     unsigned long vol_total_bytes_ = 0;
     unsigned long vol_free_bytes_ = 0;
+    unsigned long blessed_cnid_ = 0;  // CNID of blessed System Folder
 
     // APM partition detection helper
     struct APMPartition {
@@ -180,6 +182,12 @@ private:
     bool show_type_creator_ = false;
     char edit_type_[5] = {};
     char edit_creator_[5] = {};
+
+    bool show_info_ = false;
+    int info_entry_idx_ = -1;
+    short info_fdflags_ = 0;
+    char info_type_[5] = {};
+    char info_creator_[5] = {};
 
     // File picker state
     enum class PickerMode { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX, EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE, IMPORT_FOLDER };

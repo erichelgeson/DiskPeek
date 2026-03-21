@@ -710,6 +710,26 @@ int hfsplus_mkdir(HFSPlusVolume* vol, const char* path) {
     return (cnid != 0) ? 0 : -1;
 }
 
+uint32_t hfsplus_get_blessed(HFSPlusVolume* vol) {
+    if (!vol || !vol->volume) return 0;
+    // finderInfo[0] = blessed system folder CNID
+    return vol->volume->volumeHeader->finderInfo[0];
+}
+
+int hfsplus_set_blessed(HFSPlusVolume* vol, uint32_t folder_cnid) {
+    if (!vol || !vol->volume || vol->readonly) return -1;
+    vol->volume->volumeHeader->finderInfo[0] = folder_cnid;
+
+    PANIC_PROTECT_BEGIN()
+        return -1;
+    PANIC_PROTECT_END()
+
+    updateVolume(vol->volume);
+    s_panic_armed = false;
+
+    return 0;
+}
+
 int hfsplus_set_type_creator(HFSPlusVolume* vol, const char* path,
                              const char* type, const char* creator) {
     if (!vol || !vol->volume || vol->readonly) return -1;

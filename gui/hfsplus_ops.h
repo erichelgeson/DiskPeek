@@ -77,6 +77,10 @@ int hfsplus_mkdir(HFSPlusVolume* vol, const char* path);
 int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
                             const uint8_t* data, size_t size);
 
+// Get/set the blessed (boot) system folder CNID.
+uint32_t hfsplus_get_blessed(HFSPlusVolume* vol);
+int hfsplus_set_blessed(HFSPlusVolume* vol, uint32_t folder_cnid);
+
 // Set type and creator codes on a file.
 // type and creator must be exactly 4 bytes each.
 // Returns 0 on success, -1 on failure.

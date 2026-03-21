@@ -664,6 +664,7 @@ void App::open_image(const char* path) {
                 volume_name_ = hfsplus_volume_name(hfsplus_vol_);
                 vol_total_bytes_ = (unsigned long)hfsplus_total_bytes(hfsplus_vol_);
                 vol_free_bytes_ = (unsigned long)hfsplus_free_bytes(hfsplus_vol_);
+                blessed_cnid_ = hfsplus_get_blessed(hfsplus_vol_);
 
                 current_path_ = volume_name_ + ":";
                 current_cnid_ = 2; // kHFSRootFolderID
@@ -688,6 +689,7 @@ void App::open_image(const char* path) {
                 volume_name_ = vstat.name;
                 vol_total_bytes_ = vstat.totbytes;
                 vol_free_bytes_ = vstat.freebytes;
+                blessed_cnid_ = vstat.blessed;
             }
 
             current_path_ = volume_name_ + ":";
@@ -746,6 +748,7 @@ void App::open_image(const char* path) {
     volume_name_ = hfsplus_volume_name(hfsplus_vol_);
     vol_total_bytes_ = (unsigned long)hfsplus_total_bytes(hfsplus_vol_);
     vol_free_bytes_ = (unsigned long)hfsplus_free_bytes(hfsplus_vol_);
+    blessed_cnid_ = hfsplus_get_blessed(hfsplus_vol_);
 
     current_path_ = volume_name_ + ":";
     current_cnid_ = 2; // kHFSRootFolderID
@@ -767,6 +770,7 @@ void App::close_image() {
     volume_name_.clear();
     vol_total_bytes_ = 0;
     vol_free_bytes_ = 0;
+    blessed_cnid_ = 0;
     current_path_.clear();
     current_cnid_ = 0;
     cnid_stack_.clear();
@@ -821,6 +825,7 @@ void App::refresh_listing() {
         if (hfs_vstat(vol_, &vstat) == 0) {
             vol_total_bytes_ = vstat.totbytes;
             vol_free_bytes_ = vstat.freebytes;
+            blessed_cnid_ = vstat.blessed;
         }
     } else if (vol_type_ == VolumeType::HFSPLUS) {
         HFSPlusDirEntry* plus_entries = nullptr;
@@ -950,10 +955,11 @@ GLuint App::create_icon_from_rsrc(const std::vector<uint8_t>& rsrc) {
 
         if (rgba.empty()) continue;
 
+        // rgba is 64x64 pixel-doubled
         GLuint tex;
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
@@ -1077,6 +1083,7 @@ void App::render() {
     render_confirm_popup();
     render_mkdir_popup();
     render_type_creator_popup();
+    render_info_popup();
     render_file_picker();
 
     ImGui::End();
@@ -1120,7 +1127,7 @@ void App::render_file_list() {
     float avail_h = ImGui::GetContentRegionAvail().y - 60.0f;
     if (avail_h < 100.0f) avail_h = 100.0f;
 
-    ImGui::BeginChild("FileList", ImVec2(0, avail_h), true);
+    ImGui::BeginChild("FileList", ImVec2(0, avail_h), false);
 
     if (!has_volume()) {
         ImGui::TextDisabled("Open an HFS disk image to browse files");
@@ -1137,12 +1144,13 @@ void App::render_file_list() {
         }
     }
 
-    if (ImGui::BeginTable("files", 4,
+    if (ImGui::BeginTable("files", 5,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_ScrollY)) {
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBodyUntilResize)) {
 
         float icon_sz = ImGui::GetTextLineHeight();
 
+        ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, icon_sz + 16);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Type/Creator", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("Data Fork", ImGuiTableColumnFlags_WidthFixed, 80.0f);
@@ -1156,19 +1164,43 @@ void App::render_file_list() {
             // Check if file is invisible (Finder flag kIsInvisible = 0x4000)
             bool is_hidden = (e.fdflags & 0x4000) != 0;
 
+            // Label color (bits 1-3 of fdflags)
+            int label = (e.fdflags >> 1) & 0x07;
+            static const ImU32 label_colors[] = {
+                0,                             // 0: None
+                IM_COL32(255, 160, 50, 50),    // 1: Orange
+                IM_COL32(230, 50, 50, 50),     // 2: Red
+                IM_COL32(240, 120, 180, 50),   // 3: Pink
+                IM_COL32(70, 120, 230, 50),    // 4: Blue
+                IM_COL32(50, 200, 210, 50),    // 5: Cyan
+                IM_COL32(60, 190, 60, 50),     // 6: Green
+                IM_COL32(160, 160, 160, 50),   // 7: Gray
+            };
+
             ImGui::TableNextRow();
+
+            // Draw label color background across the whole row
+            if (label > 0) {
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, label_colors[label]);
+            }
+
+            // Icon column
             ImGui::TableNextColumn();
 
             // Dim hidden files
             if (is_hidden)
                 ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f);
 
-            // Draw icon
             ImVec2 icon_pos = ImGui::GetCursorScreenPos();
 
             if (e.icon_tex) {
                 ImGui::Image((ImTextureID)(intptr_t)e.icon_tex,
                              ImVec2(icon_sz, icon_sz));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::Image((ImTextureID)(intptr_t)e.icon_tex, ImVec2(128, 128));
+                    ImGui::EndTooltip();
+                }
             } else if (e.is_dir) {
                 draw_folder_icon(icon_pos, icon_sz);
                 ImGui::Dummy(ImVec2(icon_sz, icon_sz));
@@ -1177,11 +1209,16 @@ void App::render_file_list() {
                 ImGui::Dummy(ImVec2(icon_sz, icon_sz));
             }
 
-            ImGui::SameLine();
+            // Name column
+            ImGui::TableNextColumn();
 
-            // Selectable name
-            char sel_id[64];
-            snprintf(sel_id, sizeof(sel_id), "%s##%d", e.name.c_str(), i);
+            // Selectable name — show blessed indicator for system folder
+            bool is_blessed = (e.is_dir && blessed_cnid_ != 0 && e.cnid == blessed_cnid_);
+            char sel_id[80];
+            if (is_blessed)
+                snprintf(sel_id, sizeof(sel_id), "%s (blessed)##%d", e.name.c_str(), i);
+            else
+                snprintf(sel_id, sizeof(sel_id), "%s##%d", e.name.c_str(), i);
             bool selected = (selected_entry_ == i);
             if (ImGui::Selectable(sel_id, selected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
@@ -1308,9 +1345,39 @@ void App::render_file_list() {
                         picker_mode_ = PickerMode::EXPORT_FOLDER_BINHEX;
                         picker_refresh();
                     }
+                    ImGui::Separator();
+                    bool already_blessed = (blessed_cnid_ != 0 && e.cnid == blessed_cnid_);
+                    if (ImGui::MenuItem("Bless as System Folder", nullptr, already_blessed)) {
+                        unsigned long new_blessed = already_blessed ? 0 : e.cnid;
+                        if (vol_type_ == VolumeType::HFS) {
+                            hfsvolent vstat;
+                            if (hfs_vstat(vol_, &vstat) == 0) {
+                                vstat.blessed = new_blessed;
+                                if (hfs_vsetattr(vol_, &vstat) == 0)
+                                    blessed_cnid_ = new_blessed;
+                                else
+                                    set_error(std::string("Failed to bless: ") + (hfs_error ? hfs_error : "unknown"));
+                            }
+                        } else if (vol_type_ == VolumeType::HFSPLUS) {
+                            if (hfsplus_set_blessed(hfsplus_vol_, (uint32_t)new_blessed) == 0)
+                                blessed_cnid_ = new_blessed;
+                            else
+                                set_error("Failed to bless folder on HFS+ volume");
+                        }
+                        if (blessed_cnid_ == new_blessed)
+                            status_text_ = already_blessed ? "Unblessed: " + e.name : "Blessed: " + e.name;
+                    }
                 }
 
                 ImGui::Separator();
+                // Get Info — available for both files and directories
+                if (ImGui::MenuItem("Get Info")) {
+                    info_entry_idx_ = i;
+                    info_fdflags_ = e.fdflags;
+                    memcpy(info_type_, e.type, 5);
+                    memcpy(info_creator_, e.creator, 5);
+                    show_info_ = true;
+                }
                 if (ImGui::MenuItem("Delete")) {
                     confirm_text_ = "Delete \"" + e.name + "\"?";
                     confirm_target_ = ctx_hfs_path;
@@ -1572,6 +1639,149 @@ void App::render_type_creator_popup() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             show_type_creator_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void App::render_info_popup() {
+    if (show_info_)
+        ImGui::OpenPopup("Get Info");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("Get Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (info_entry_idx_ < 0 || info_entry_idx_ >= (int)entries_.size()) {
+            show_info_ = false;
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+
+        HFSEntry& e = entries_[info_entry_idx_];
+        std::string hfs_path = current_path_ + e.name;
+
+        ImGui::Text("Name: %s", e.name.c_str());
+        ImGui::Text("CNID: %lu", e.cnid);
+        ImGui::Text("Kind: %s", e.is_dir ? "Folder" : "File");
+        ImGui::Separator();
+
+        if (!e.is_dir) {
+            ImGui::Text("Data Fork: %s", format_size(e.size).c_str());
+            ImGui::Text("Rsrc Fork: %s", format_size(e.rsize).c_str());
+            ImGui::Separator();
+
+            ImGui::Text("Type:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(60);
+            ImGui::InputText("##infotype", info_type_, 5);
+            ImGui::SameLine();
+            ImGui::Text("Creator:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(60);
+            ImGui::InputText("##infocreator", info_creator_, 5);
+            ImGui::Separator();
+        }
+
+        ImGui::Text("Finder Flags:");
+
+        // Finder flag checkboxes
+        bool f;
+
+        f = (info_fdflags_ & 0x4000) != 0;
+        if (ImGui::Checkbox("Invisible", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x4000) : (info_fdflags_ & ~0x4000);
+
+        f = (info_fdflags_ & 0x0400) != 0;
+        if (ImGui::Checkbox("Has Custom Icon", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x0400) : (info_fdflags_ & ~0x0400);
+
+        f = (info_fdflags_ & 0x2000) != 0;
+        if (ImGui::Checkbox("Has Bundle (BNDL)", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x2000) : (info_fdflags_ & ~0x2000);
+
+        f = (info_fdflags_ & 0x1000) != 0;
+        if (ImGui::Checkbox("Name Locked", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x1000) : (info_fdflags_ & ~0x1000);
+
+        f = (info_fdflags_ & 0x0800) != 0;
+        if (ImGui::Checkbox("Stationery Pad", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x0800) : (info_fdflags_ & ~0x0800);
+
+        f = (info_fdflags_ & 0x8000) != 0;
+        if (ImGui::Checkbox("Is Alias", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x8000) : (info_fdflags_ & ~0x8000);
+
+        f = (info_fdflags_ & 0x0100) != 0;
+        if (ImGui::Checkbox("Has Been Inited", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x0100) : (info_fdflags_ & ~0x0100);
+
+        f = (info_fdflags_ & 0x0040) != 0;
+        if (ImGui::Checkbox("Shared (no write to rsrc)", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x0040) : (info_fdflags_ & ~0x0040);
+
+        f = (info_fdflags_ & 0x0080) != 0;
+        if (ImGui::Checkbox("Has No INITs", &f))
+            info_fdflags_ = f ? (info_fdflags_ | 0x0080) : (info_fdflags_ & ~0x0080);
+
+        // Label color (bits 1-3)
+        int label = (info_fdflags_ >> 1) & 0x07;
+        const char* label_names[] = { "None", "Orange", "Red", "Pink", "Blue", "Cyan", "Green", "Gray" };
+        if (ImGui::Combo("Label", &label, label_names, 8)) {
+            info_fdflags_ = (info_fdflags_ & ~0x000E) | ((label & 0x07) << 1);
+        }
+
+        ImGui::Text("Raw flags: 0x%04X", (unsigned)info_fdflags_ & 0xFFFF);
+        ImGui::Spacing();
+
+        if (ImGui::Button("Apply", ImVec2(100, 0))) {
+            // Pad type/creator to 4 chars
+            char new_type[5] = "    ";
+            char new_creator[5] = "    ";
+            for (int j = 0; j < 4 && info_type_[j]; j++) new_type[j] = info_type_[j];
+            for (int j = 0; j < 4 && info_creator_[j]; j++) new_creator[j] = info_creator_[j];
+            new_type[4] = '\0';
+            new_creator[4] = '\0';
+
+            if (vol_type_ == VolumeType::HFS) {
+                hfsdirent ent;
+                if (hfs_stat(vol_, hfs_path.c_str(), &ent) == 0) {
+                    ent.fdflags = info_fdflags_;
+                    if (!e.is_dir) {
+                        memcpy(ent.u.file.type, new_type, 5);
+                        memcpy(ent.u.file.creator, new_creator, 5);
+                    }
+                    if (hfs_setattr(vol_, hfs_path.c_str(), &ent) == -1)
+                        set_error(std::string("Failed: ") + (hfs_error ? hfs_error : "unknown"));
+                    else {
+                        e.fdflags = info_fdflags_;
+                        if (!e.is_dir) {
+                            memcpy(e.type, new_type, 5);
+                            memcpy(e.creator, new_creator, 5);
+                        }
+                        status_text_ = "Updated info for " + e.name;
+                    }
+                }
+            } else if (vol_type_ == VolumeType::HFSPLUS) {
+                // For HFS+ we can set type/creator; flags TODO
+                if (!e.is_dir) {
+                    hfsplus_set_type_creator(hfsplus_vol_, hfs_path.c_str(),
+                                             new_type, new_creator);
+                    memcpy(e.type, new_type, 5);
+                    memcpy(e.creator, new_creator, 5);
+                }
+                e.fdflags = info_fdflags_;
+                status_text_ = "Updated info for " + e.name;
+            }
+
+            show_info_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            show_info_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
