@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <memory>
 
 #include "imgui.h"
 
@@ -17,6 +18,7 @@ extern "C" {
 
 #include "hfsplus_ops.h"
 #include "faf.h"
+#include "hfsbrowse.h"
 
 typedef unsigned int GLuint;
 
@@ -149,15 +151,15 @@ private:
     bool quit_requested_ = false;
     std::string status_text_;
 
-    // Volume state (dual-backend)
+    // Volume state (legacy raw pointers — being migrated to Volume class)
     VolumeType vol_type_ = VolumeType::NONE;
-    hfsvol* vol_ = nullptr;
+    hfsvol* hfs_vol_ = nullptr;
     HFSPlusVolume* hfsplus_vol_ = nullptr;
     std::string image_path_;
     std::string volume_name_;
     unsigned long vol_total_bytes_ = 0;
     unsigned long vol_free_bytes_ = 0;
-    unsigned long blessed_cnid_ = 0;  // CNID of blessed System Folder
+    unsigned long blessed_cnid_ = 0;
 
     // APM partition detection helper
     struct APMPartition {
