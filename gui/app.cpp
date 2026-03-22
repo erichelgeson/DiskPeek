@@ -890,21 +890,38 @@ void App::render_file_list() {
                             picker_refresh();
                         }
                         if (ImGui::MenuItem("Copy Icon")) {
-                            // Write temp PNG then copy to clipboard via platform tool
-                            std::string tmp = "/tmp/hfsbrowser_icon.png";
-                            if (export_icon_png(tmp, e, ctx_hfs_path)) {
-#ifdef __APPLE__
-                                system(("osascript -e 'set the clipboard to (read (POSIX file \""
-                                        + tmp + "\") as «class PNGf»)' 2>/dev/null").c_str());
-#elif defined(_WIN32)
-                                // Windows: not implemented yet
-#else
-                                // Linux: try wl-copy (Wayland) then xclip (X11)
-                                if (system(("wl-copy --type image/png < " + tmp + " 2>/dev/null").c_str()) != 0)
-                                    if (system(("xclip -selection clipboard -t image/png < " + tmp + " 2>/dev/null").c_str()) != 0)
-                                        status_text_ = "Clipboard copy failed (install xclip or wl-copy)";
-#endif
-                                status_text_ = "Icon copied to clipboard";
+                            // Read icon RGBA and convert to PNG in memory
+                            std::vector<uint8_t> rsrc = read_rsrc_fork(ctx_hfs_path);
+                            std::vector<uint8_t> rgba = hfsbrowse::icon::extract_rgba(rsrc);
+                            if (!rgba.empty()) {
+                                // Write PNG to temp file, read it back as bytes
+                                std::string tmp = "/tmp/hfsbrowser_clip.png";
+                                if (hfsbrowse::icon::write_png(tmp, rgba)) {
+                                    FILE* pf = fopen(tmp.c_str(), "rb");
+                                    if (pf) {
+                                        fseek(pf, 0, SEEK_END);
+                                        long psz = ftell(pf);
+                                        fseek(pf, 0, SEEK_SET);
+                                        // Store in a static buffer for SDL callback
+                                        static std::vector<uint8_t> s_clip_png;
+                                        s_clip_png.resize(psz);
+                                        fread(s_clip_png.data(), 1, psz, pf);
+                                        fclose(pf);
+                                        remove(tmp.c_str());
+
+                                        static const char* mime_types[] = { "image/png" };
+                                        SDL_SetClipboardData(
+                                            [](void*, const char* mime, size_t* len) -> const void* {
+                                                if (strcmp(mime, "image/png") == 0) {
+                                                    *len = s_clip_png.size();
+                                                    return s_clip_png.data();
+                                                }
+                                                return nullptr;
+                                            },
+                                            nullptr, nullptr, mime_types, 1);
+                                        status_text_ = "Icon copied to clipboard";
+                                    }
+                                }
                             }
                         }
                     }
