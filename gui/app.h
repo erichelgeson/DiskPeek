@@ -56,7 +56,7 @@ public:
 
     void open_image(const char* path);
     void import_file(const char* path);
-    bool has_volume() const { return vol_type_ != VolumeType::NONE; }
+    bool has_volume() const { return vol_ != nullptr; }
 
 private:
     // UI rendering
@@ -78,6 +78,7 @@ private:
     void render_progress_bar();
 
     // HFS operations
+    void setup_volume(std::unique_ptr<hfsbrowse::Volume> v, const char* path);
     void close_image();
     void refresh_listing();
     void navigate_to(const char* path);
@@ -151,10 +152,9 @@ private:
     bool quit_requested_ = false;
     std::string status_text_;
 
-    // Volume state (legacy raw pointers — being migrated to Volume class)
+    // Volume state
     VolumeType vol_type_ = VolumeType::NONE;
-    hfsvol* hfs_vol_ = nullptr;
-    HFSPlusVolume* hfsplus_vol_ = nullptr;
+    std::unique_ptr<hfsbrowse::Volume> vol_;
     std::string image_path_;
     std::string volume_name_;
     unsigned long vol_total_bytes_ = 0;

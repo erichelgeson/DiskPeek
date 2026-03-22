@@ -371,4 +371,14 @@ private:
     uint32_t blessed_ = 0;
 };
 
+// --- Factory functions ---
+
+std::unique_ptr<Volume> make_hfs_volume(void* hfsvol_ptr, bool readonly) {
+    return std::make_unique<HFSVolumeImpl>((hfsvol*)hfsvol_ptr, readonly);
+}
+
+std::unique_ptr<Volume> make_hfsplus_volume(void* hfsplus_ptr, bool readonly) {
+    return std::make_unique<HFSPlusVolImpl>((HFSPlusVolume*)hfsplus_ptr, readonly);
+}
+
 } // namespace hfsbrowse

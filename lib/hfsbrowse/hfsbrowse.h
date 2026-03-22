@@ -71,6 +71,12 @@ public:
     virtual std::string check() = 0;
 };
 
+// Factory: create Volume from raw hfsvol* (takes ownership, will call hfs_umount)
+std::unique_ptr<Volume> make_hfs_volume(void* hfsvol_ptr, bool readonly);
+
+// Factory: create Volume from raw HFSPlusVolume* (takes ownership, will call hfsplus_close)
+std::unique_ptr<Volume> make_hfsplus_volume(void* hfsplus_ptr, bool readonly);
+
 } // namespace hfsbrowse
 
 #endif // HFSBROWSE_VOLUME_H

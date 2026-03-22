@@ -173,20 +173,6 @@ void App::draw_file_icon(ImVec2 pos, float size) {
 
 // --- Helpers ---
 
-static HFSEntry hfsentry_from_plus(const HFSPlusDirEntry& pe) {
-    HFSEntry e;
-    e.name = pe.name;
-    e.is_dir = pe.is_dir;
-    e.cnid = pe.cnid;
-    e.parent_cnid = pe.parent_cnid;
-    e.fdflags = pe.finder_flags;
-    e.size = (unsigned long)pe.data_size;
-    e.rsize = (unsigned long)pe.rsrc_size;
-    memcpy(e.type, pe.type, 5);
-    memcpy(e.creator, pe.creator, 5);
-    return e;
-}
-
 // --- App lifecycle ---
 
 App::App() {}
@@ -300,6 +286,28 @@ static uint64_t detect_hfsplus_wrapper(const char* path, uint64_t partition_offs
     return hfsplus_offset;
 }
 
+// Helper: set up app state after a volume is successfully opened
+void App::setup_volume(std::unique_ptr<hfsbrowse::Volume> v, const char* path) {
+    vol_ = std::move(v);
+    vol_type_ = (vol_->type() == hfsbrowse::VolumeType::HFS) ? VolumeType::HFS : VolumeType::HFSPLUS;
+    image_path_ = path;
+    volume_name_ = vol_->name();
+    vol_total_bytes_ = (unsigned long)vol_->total_bytes();
+    vol_free_bytes_ = (unsigned long)vol_->free_bytes();
+    blessed_cnid_ = vol_->blessed_folder();
+    current_path_ = volume_name_ + ":";
+    current_cnid_ = 2;
+    cnid_stack_.clear();
+
+    const char* type_str = (vol_type_ == VolumeType::HFS) ? "HFS" : "HFS+";
+    if (vol_->is_readonly())
+        status_text_ = std::string("Opened ") + type_str + " (read-only): " + path;
+    else
+        status_text_ = std::string("Opened ") + type_str + ": " + path;
+
+    refresh_listing();
+}
+
 void App::open_image(const char* path) {
     close_image();
 
@@ -316,169 +324,92 @@ void App::open_image(const char* path) {
     partitions_to_try[ntry++] = 0;
 
     bool readonly = false;
+    hfsvol* raw_hfs = nullptr;
     int mounted_pnum = -1;
-    for (int t = 0; t < ntry && !hfs_vol_; t++) {
+    for (int t = 0; t < ntry && !raw_hfs; t++) {
         int pnum = partitions_to_try[t];
-        hfs_vol_ = hfs_mount(path, pnum, HFS_MODE_RDWR);
-        if (!hfs_vol_) {
-            hfs_vol_ = hfs_mount(path, pnum, HFS_MODE_RDONLY);
-            if (hfs_vol_) readonly = true;
+        raw_hfs = hfs_mount(path, pnum, HFS_MODE_RDWR);
+        if (!raw_hfs) {
+            raw_hfs = hfs_mount(path, pnum, HFS_MODE_RDONLY);
+            if (raw_hfs) readonly = true;
         }
         fprintf(stderr, "hfsbrowser: tried HFS pnum=%d -> %s\n", pnum,
-                hfs_vol_ ? "ok" : (hfs_error ? hfs_error : "failed"));
-        if (hfs_vol_) mounted_pnum = pnum;
+                raw_hfs ? "ok" : (hfs_error ? hfs_error : "failed"));
+        if (raw_hfs) mounted_pnum = pnum;
     }
 
-    // Collect APM partition offsets (needed for both wrapper detection and HFS+ fallback)
+    // Collect APM partition offsets
     APMPartition apm_parts[16];
     int napm = read_apm_partitions(path, apm_parts, 16);
 
     // If HFS mounted, check for HFS+ wrapper
-    if (hfs_vol_) {
-        // Determine the byte offset of the partition we mounted.
-        // libhfs pnum counts only Apple_HFS partitions (1-based), so we need
-        // to find the Nth Apple_HFS entry in the APM.
+    if (raw_hfs) {
         uint64_t part_offset = 0;
         if (mounted_pnum > 0) {
             int hfs_idx = 0;
             for (int i = 0; i < napm; i++) {
                 if (strstr(apm_parts[i].type, "Apple_HFS") != nullptr) {
                     hfs_idx++;
-                    if (hfs_idx == mounted_pnum) {
-                        part_offset = apm_parts[i].offset;
-                        break;
-                    }
+                    if (hfs_idx == mounted_pnum) { part_offset = apm_parts[i].offset; break; }
                 }
             }
         }
 
         uint64_t embed_offset = detect_hfsplus_wrapper(path, part_offset);
         if (embed_offset > 0) {
-            // This is an HFS wrapper — close HFS and try HFS+ at the embedded offset
-            fprintf(stderr, "hfsbrowser: closing HFS wrapper, trying embedded HFS+ at offset %llu\n",
-                    (unsigned long long)embed_offset);
-            hfs_umount(hfs_vol_);
-            hfs_vol_ = nullptr;
+            fprintf(stderr, "hfsbrowser: closing HFS wrapper, trying embedded HFS+\n");
+            hfs_umount(raw_hfs);
+            raw_hfs = nullptr;
 
-            hfsplus_vol_ = hfsplus_open(path, embed_offset, false);
-            if (!hfsplus_vol_) {
-                hfsplus_vol_ = hfsplus_open(path, embed_offset, true);
-                if (hfsplus_vol_) readonly = true;
-            }
+            HFSPlusVolume* raw_plus = hfsplus_open(path, embed_offset, false);
+            if (!raw_plus) { raw_plus = hfsplus_open(path, embed_offset, true); if (raw_plus) readonly = true; }
 
-            if (hfsplus_vol_) {
-                vol_type_ = VolumeType::HFSPLUS;
-                image_path_ = path;
-
-                if (readonly)
-                    status_text_ = "Opened HFS+ (read-only): " + std::string(path);
-                else
-                    status_text_ = "Opened HFS+: " + std::string(path);
-
-                volume_name_ = hfsplus_volume_name(hfsplus_vol_);
-                vol_total_bytes_ = (unsigned long)hfsplus_total_bytes(hfsplus_vol_);
-                vol_free_bytes_ = (unsigned long)hfsplus_free_bytes(hfsplus_vol_);
-                blessed_cnid_ = hfsplus_get_blessed(hfsplus_vol_);
-
-                current_path_ = volume_name_ + ":";
-                current_cnid_ = 2; // kHFSRootFolderID
-                refresh_listing();
+            if (raw_plus) {
+                setup_volume(hfsbrowse::make_hfsplus_volume(raw_plus, readonly), path);
                 return;
             }
-
-            // HFS+ at embedded offset failed — fall through to general HFS+ search
-            fprintf(stderr, "hfsbrowser: embedded HFS+ open failed, trying other offsets\n");
+            fprintf(stderr, "hfsbrowser: embedded HFS+ open failed\n");
         } else {
-            // Genuine classic HFS volume — use it
-            vol_type_ = VolumeType::HFS;
-            image_path_ = path;
-
-            if (readonly)
-                status_text_ = "Opened HFS (read-only): " + std::string(path);
-            else
-                status_text_ = "Opened HFS: " + std::string(path);
-
-            hfsvolent vstat;
-            if (hfs_vstat(hfs_vol_, &vstat) == 0) {
-                volume_name_ = vstat.name;
-                vol_total_bytes_ = vstat.totbytes;
-                vol_free_bytes_ = vstat.freebytes;
-                blessed_cnid_ = vstat.blessed;
-            }
-
-            current_path_ = volume_name_ + ":";
-            refresh_listing();
+            // Genuine classic HFS
+            setup_volume(hfsbrowse::make_hfs_volume(raw_hfs, readonly), path);
             return;
         }
     }
 
-    // --- Classic HFS failed (or was a wrapper). Try HFS+ ---
+    // --- Try HFS+ ---
     fprintf(stderr, "hfsbrowser: trying HFS+\n");
 
-    // Build list of offsets to try: APM Apple_HFS partitions, then offset 0
     uint64_t offsets_to_try[17];
     int noffsets = 0;
-
     for (int i = 0; i < napm; i++) {
         if (strstr(apm_parts[i].type, "Apple_HFS") != nullptr) {
-            // Also check each APM partition for HFS wrapper with embedded HFS+
             uint64_t embed = detect_hfsplus_wrapper(path, apm_parts[i].offset);
-            if (embed > 0) {
-                offsets_to_try[noffsets++] = embed;
-                fprintf(stderr, "hfsbrowser: APM partition %d has HFS wrapper, embedded HFS+ at offset %llu\n",
-                        i, (unsigned long long)embed);
-            }
+            if (embed > 0) offsets_to_try[noffsets++] = embed;
             offsets_to_try[noffsets++] = apm_parts[i].offset;
-            fprintf(stderr, "hfsbrowser: APM partition at offset %llu type=%s\n",
-                    (unsigned long long)apm_parts[i].offset, apm_parts[i].type);
         }
     }
-    offsets_to_try[noffsets++] = 0;  // Also try raw (no partition map)
+    offsets_to_try[noffsets++] = 0;
 
-    for (int t = 0; t < noffsets && !hfsplus_vol_; t++) {
+    HFSPlusVolume* raw_plus = nullptr;
+    for (int t = 0; t < noffsets && !raw_plus; t++) {
         uint64_t off = offsets_to_try[t];
-        hfsplus_vol_ = hfsplus_open(path, off, false);
-        if (!hfsplus_vol_) {
-            hfsplus_vol_ = hfsplus_open(path, off, true);
-            if (hfsplus_vol_) readonly = true;
-        }
+        raw_plus = hfsplus_open(path, off, false);
+        if (!raw_plus) { raw_plus = hfsplus_open(path, off, true); if (raw_plus) readonly = true; }
         fprintf(stderr, "hfsbrowser: tried HFS+ offset=%llu -> %s\n",
-                (unsigned long long)off, hfsplus_vol_ ? "ok" : "failed");
+                (unsigned long long)off, raw_plus ? "ok" : "failed");
     }
 
-    if (!hfsplus_vol_) {
-        set_error(std::string("Failed to open image: not a valid HFS or HFS+ volume"));
+    if (!raw_plus) {
+        set_error("Failed to open image: not a valid HFS or HFS+ volume");
         return;
     }
 
-    vol_type_ = VolumeType::HFSPLUS;
-    image_path_ = path;
-
-    if (readonly)
-        status_text_ = "Opened HFS+ (read-only): " + std::string(path);
-    else
-        status_text_ = "Opened HFS+: " + std::string(path);
-
-    volume_name_ = hfsplus_volume_name(hfsplus_vol_);
-    vol_total_bytes_ = (unsigned long)hfsplus_total_bytes(hfsplus_vol_);
-    vol_free_bytes_ = (unsigned long)hfsplus_free_bytes(hfsplus_vol_);
-    blessed_cnid_ = hfsplus_get_blessed(hfsplus_vol_);
-
-    current_path_ = volume_name_ + ":";
-    current_cnid_ = 2; // kHFSRootFolderID
-    refresh_listing();
+    setup_volume(hfsbrowse::make_hfsplus_volume(raw_plus, readonly), path);
 }
 
 void App::close_image() {
     cleanup_icons();
-    if (hfs_vol_) {
-        hfs_umount(hfs_vol_);
-        hfs_vol_ = nullptr;
-    }
-    if (hfsplus_vol_) {
-        hfsplus_close(hfsplus_vol_);
-        hfsplus_vol_ = nullptr;
-    }
+    vol_.reset();
     vol_type_ = VolumeType::NONE;
     image_path_.clear();
     volume_name_.clear();
@@ -502,76 +433,41 @@ void App::refresh_listing() {
     entries_.clear();
     selected_entry_ = -1;
 
-    if (vol_type_ == VolumeType::NONE) return;
+    if (!vol_) return;
 
-    if (vol_type_ == VolumeType::HFS) {
-        hfsdir* dir = hfs_opendir(hfs_vol_, current_path_.c_str());
-        if (!dir) {
-            set_error(std::string("Failed to open directory: ") + (hfs_error ? hfs_error : "unknown"));
-            return;
-        }
+    // List directory via Volume interface
+    std::vector<HBEntry> hb_entries;
+    if (vol_type_ == VolumeType::HFSPLUS && current_cnid_ != 0)
+        hb_entries = vol_->list_dir(current_cnid_);
+    else
+        hb_entries = vol_->list_dir_by_path(current_path_);
 
-        hfsdirent ent;
-        while (hfs_readdir(dir, &ent) == 0) {
-            HFSEntry e;
-            e.name = ent.name;
-            e.is_dir = (ent.flags & HFS_ISDIR) != 0;
-            e.cnid = ent.cnid;
-            e.fdflags = ent.fdflags;
-
-            if (e.is_dir) {
-                e.size = 0;
-                e.rsize = 0;
-                memset(e.type, 0, sizeof(e.type));
-                memset(e.creator, 0, sizeof(e.creator));
-            } else {
-                e.size = ent.u.file.dsize;
-                e.rsize = ent.u.file.rsize;
-                memcpy(e.type, ent.u.file.type, 5);
-                memcpy(e.creator, ent.u.file.creator, 5);
-            }
-
-            if (!show_hidden_ && (e.fdflags & 0x4000))
-                continue;
-            entries_.push_back(e);
-        }
-
-        hfs_closedir(dir);
-
-        // Update volume stats
-        hfsvolent vstat;
-        if (hfs_vstat(hfs_vol_, &vstat) == 0) {
-            vol_total_bytes_ = vstat.totbytes;
-            vol_free_bytes_ = vstat.freebytes;
-            blessed_cnid_ = vstat.blessed;
-        }
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        HFSPlusDirEntry* plus_entries = nullptr;
-        int plus_count = 0;
-
-        int rc;
-        if (current_cnid_ != 0)
-            rc = hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)current_cnid_, &plus_entries, &plus_count);
-        else
-            rc = hfsplus_list_dir(hfsplus_vol_, current_path_.c_str(), &plus_entries, &plus_count);
-
-        if (rc != 0) {
-            set_error("Failed to open directory");
-            return;
-        }
-
-        for (int i = 0; i < plus_count; i++) {
-            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
-            if (!show_hidden_ && (e.fdflags & 0x4000))
-                continue;
-            entries_.push_back(e);
-        }
-
-        hfsplus_free_entries(plus_entries);
-
-        vol_total_bytes_ = (unsigned long)hfsplus_total_bytes(hfsplus_vol_);
-        vol_free_bytes_ = (unsigned long)hfsplus_free_bytes(hfsplus_vol_);
+    if (hb_entries.empty() && vol_type_ == VolumeType::HFS) {
+        // HFS might fail to open the dir
+        // (empty is also valid, so only error if hfs_error is set)
     }
+
+    for (auto& hb : hb_entries) {
+        if (!show_hidden_ && (hb.fdflags & 0x4000))
+            continue;
+        HFSEntry e;
+        e.name = std::move(hb.name);
+        e.is_dir = hb.is_dir;
+        e.cnid = hb.cnid;
+        e.parent_cnid = hb.parent_cnid;
+        e.fdflags = hb.fdflags;
+        e.size = (unsigned long)hb.data_size;
+        e.rsize = (unsigned long)hb.rsrc_size;
+        memcpy(e.type, hb.type, 5);
+        memcpy(e.creator, hb.creator, 5);
+        entries_.push_back(std::move(e));
+    }
+
+    // Update cached volume stats
+    vol_->refresh_stats();
+    vol_total_bytes_ = (unsigned long)vol_->total_bytes();
+    vol_free_bytes_ = (unsigned long)vol_->free_bytes();
+    blessed_cnid_ = vol_->blessed_folder();
 
     // Sort: directories first, then alphabetical
     std::sort(entries_.begin(), entries_.end(), [](const HFSEntry& a, const HFSEntry& b) {
@@ -599,48 +495,14 @@ std::vector<uint8_t> App::read_rsrc_fork(const std::string& hfs_path) {
             }
         }
 
-        uint8_t* data = nullptr;
-        size_t size = 0;
-        int rc;
         if (cnid != 0)
-            rc = hfsplus_read_file_by_cnid(hfsplus_vol_, cnid, pcnid, &data, &size, 1);
+            return vol_->read_fork(cnid, pcnid, 1);
         else
-            rc = hfsplus_read_file(hfsplus_vol_, hfs_path.c_str(), &data, &size, 1);
-
-        if (rc == 0 && data) {
-            std::vector<uint8_t> result(data, data + size);
-            free(data);
-            return result;
-        }
-        return {};
+            return vol_->read_fork_by_path(hfs_path, 1);
     }
 
     // Classic HFS path
-    hfsfile* f = hfs_open(hfs_vol_, hfs_path.c_str());
-    if (!f) return {};
-
-    hfs_setfork(f, 1);  // switch to resource fork
-
-    // Get resource fork size by seeking to end
-    unsigned long size = hfs_seek(f, 0, HFS_SEEK_END);
-    if (size == 0 || size == (unsigned long)-1) {
-        hfs_close(f);
-        return {};
-    }
-
-    hfs_seek(f, 0, HFS_SEEK_SET);
-
-    std::vector<uint8_t> data(size);
-    unsigned long total = 0;
-    while (total < size) {
-        unsigned long n = hfs_read(f, data.data() + total, size - total);
-        if (n == 0 || n == (unsigned long)-1) break;
-        total += n;
-    }
-
-    hfs_close(f);
-    data.resize(total);
-    return data;
+    return vol_->read_fork_by_path(hfs_path, 1);
 }
 
 GLuint App::create_icon_from_rsrc(const std::vector<uint8_t>& rsrc) {
@@ -696,8 +558,8 @@ void App::navigate_to(const char* dirname) {
     std::string new_path = current_path_ + dirname + ":";
 
     if (vol_type_ == VolumeType::HFS) {
-        if (hfs_chdir(hfs_vol_, new_path.c_str()) == -1) {
-            set_error(std::string("Failed to enter directory: ") + (hfs_error ? hfs_error : "unknown"));
+        if (vol_->chdir(new_path) != 0) {
+            set_error("Failed to enter directory");
             return;
         }
     } else if (vol_type_ == VolumeType::HFSPLUS) {
@@ -726,8 +588,8 @@ void App::navigate_up() {
     std::string parent = path.substr(0, pos + 1);
 
     if (vol_type_ == VolumeType::HFS) {
-        if (hfs_chdir(hfs_vol_, parent.c_str()) == -1) {
-            set_error(std::string("Failed to navigate up: ") + (hfs_error ? hfs_error : "unknown"));
+        if (vol_->chdir(parent) != 0) {
+            set_error("Failed to navigate up");
             return;
         }
     } else if (vol_type_ == VolumeType::HFSPLUS) {
@@ -863,8 +725,8 @@ void App::render_path_bar() {
             if (ImGui::SmallButton(btn_id)) {
                 // Navigate to this path
                 if (vol_type_ == VolumeType::HFS) {
-                    if (hfs_chdir(hfs_vol_, target.c_str()) == -1) {
-                        set_error(std::string("Navigation failed: ") + (hfs_error ? hfs_error : "unknown"));
+                    if (vol_->chdir(target) != 0) {
+                        set_error("Navigation failed");
                         ImGui::PopStyleColor();
                         return;
                     }
@@ -874,17 +736,14 @@ void App::render_path_bar() {
                     current_cnid_ = 2; // root
                     // Walk segments to find each folder CNID
                     for (size_t j = 1; j <= s; j++) {
-                        HFSPlusDirEntry* ents = nullptr;
-                        int cnt = 0;
-                        hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)current_cnid_, &ents, &cnt);
-                        for (int k = 0; k < cnt; k++) {
-                            if (ents[k].is_dir && segments[j] == ents[k].name) {
+                        auto dir_entries = vol_->list_dir((uint32_t)current_cnid_);
+                        for (const auto& de : dir_entries) {
+                            if (de.is_dir && segments[j] == de.name) {
                                 cnid_stack_.push_back(current_cnid_);
-                                current_cnid_ = ents[k].cnid;
+                                current_cnid_ = de.cnid;
                                 break;
                             }
                         }
-                        hfsplus_free_entries(ents);
                     }
                 }
                 current_path_ = target;
@@ -1059,28 +918,14 @@ void App::render_file_list() {
 
                             // Try magic bytes from data fork
                             if (e.size > 0) {
-                                uint8_t* data = nullptr;
-                                size_t dsize = 0;
-                                int rc = -1;
-                                if (vol_type_ == VolumeType::HFS) {
-                                    hfsfile* hf = hfs_open(hfs_vol_, ctx_hfs_path.c_str());
-                                    if (hf) {
-                                        uint8_t mbuf[1024];
-                                        unsigned long nr = hfs_read(hf, mbuf, sizeof(mbuf));
-                                        hfs_close(hf);
-                                        if (nr > 0)
-                                            found = detect_type_creator_magic(mbuf, nr, &tcr);
-                                    }
-                                } else if (vol_type_ == VolumeType::HFSPLUS) {
-                                    // Read just enough for magic detection
-                                    rc = hfsplus_read_file_by_cnid(hfsplus_vol_,
-                                            (uint32_t)e.cnid, (uint32_t)e.parent_cnid,
-                                            &data, &dsize, 0);
-                                    if (rc == 0 && data && dsize > 0) {
-                                        size_t check = dsize > 1024 ? 1024 : dsize;
-                                        found = detect_type_creator_magic(data, check, &tcr);
-                                        free(data);
-                                    }
+                                std::vector<uint8_t> fdata;
+                                if (vol_type_ == VolumeType::HFS)
+                                    fdata = vol_->read_fork_by_path(ctx_hfs_path, 0);
+                                else
+                                    fdata = vol_->read_fork((uint32_t)e.cnid, (uint32_t)e.parent_cnid, 0);
+                                if (!fdata.empty()) {
+                                    size_t check = fdata.size() > 1024 ? 1024 : fdata.size();
+                                    found = detect_type_creator_magic(fdata.data(), check, &tcr);
                                 }
                             }
 
@@ -1089,17 +934,7 @@ void App::render_file_list() {
                                 found = detect_type_creator_ext(e.name.c_str(), &tcr);
 
                             if (found) {
-                                if (vol_type_ == VolumeType::HFS) {
-                                    hfsdirent ent;
-                                    if (hfs_stat(hfs_vol_, ctx_hfs_path.c_str(), &ent) == 0) {
-                                        memcpy(ent.u.file.type, tcr.type, 5);
-                                        memcpy(ent.u.file.creator, tcr.creator, 5);
-                                        hfs_setattr(hfs_vol_, ctx_hfs_path.c_str(), &ent);
-                                    }
-                                } else if (vol_type_ == VolumeType::HFSPLUS) {
-                                    hfsplus_set_type_creator(hfsplus_vol_, ctx_hfs_path.c_str(),
-                                                             tcr.type, tcr.creator);
-                                }
+                                vol_->set_type_creator(ctx_hfs_path, tcr.type, tcr.creator);
                                 // Update the displayed entry
                                 entries_[i].type[0] = tcr.type[0]; entries_[i].type[1] = tcr.type[1];
                                 entries_[i].type[2] = tcr.type[2]; entries_[i].type[3] = tcr.type[3];
@@ -1134,21 +969,10 @@ void App::render_file_list() {
                     bool already_blessed = (blessed_cnid_ != 0 && e.cnid == blessed_cnid_);
                     if (ImGui::MenuItem("Bless as System Folder", nullptr, already_blessed)) {
                         unsigned long new_blessed = already_blessed ? 0 : e.cnid;
-                        if (vol_type_ == VolumeType::HFS) {
-                            hfsvolent vstat;
-                            if (hfs_vstat(hfs_vol_, &vstat) == 0) {
-                                vstat.blessed = new_blessed;
-                                if (hfs_vsetattr(hfs_vol_, &vstat) == 0)
-                                    blessed_cnid_ = new_blessed;
-                                else
-                                    set_error(std::string("Failed to bless: ") + (hfs_error ? hfs_error : "unknown"));
-                            }
-                        } else if (vol_type_ == VolumeType::HFSPLUS) {
-                            if (hfsplus_set_blessed(hfsplus_vol_, (uint32_t)new_blessed) == 0)
-                                blessed_cnid_ = new_blessed;
-                            else
-                                set_error("Failed to bless folder on HFS+ volume");
-                        }
+                        if (vol_->set_blessed((uint32_t)new_blessed) == 0)
+                            blessed_cnid_ = new_blessed;
+                        else
+                            set_error("Failed to bless folder");
                         if (blessed_cnid_ == new_blessed)
                             status_text_ = already_blessed ? "Unblessed: " + e.name : "Blessed: " + e.name;
                     }
@@ -1176,17 +1000,10 @@ void App::render_file_list() {
                 if (!cut_path_.empty()) {
                     if (ImGui::MenuItem("Paste Here")) {
                         std::string dest = current_path_ + cut_name_;
-                        int rc = -1;
-                        if (vol_type_ == VolumeType::HFS) {
-                            rc = hfs_rename(hfs_vol_, cut_path_.c_str(), dest.c_str());
-                            if (rc == -1)
-                                set_error(std::string("Move failed: ") + (hfs_error ? hfs_error : "unknown"));
-                        } else if (vol_type_ == VolumeType::HFSPLUS) {
-                            rc = hfsplus_rename(hfsplus_vol_, cut_path_.c_str(), dest.c_str());
-                            if (rc != 0)
-                                set_error("Move failed on HFS+ volume");
-                        }
-                        if (rc == 0) {
+                        int rc = vol_->rename(cut_path_, dest);
+                        if (rc != 0)
+                            set_error("Move failed");
+                        else {
                             status_text_ = "Moved: " + cut_name_;
                             cut_path_.clear();
                             cut_name_.clear();
@@ -1297,16 +1114,9 @@ void App::render_action_bar() {
         ImGui::SameLine();
         if (ImGui::Button("Paste")) {
             std::string dest = current_path_ + cut_name_;
-            int rc = -1;
-            if (vol_type_ == VolumeType::HFS) {
-                rc = hfs_rename(hfs_vol_, cut_path_.c_str(), dest.c_str());
-                if (rc == -1)
-                    set_error(std::string("Move failed: ") + (hfs_error ? hfs_error : "unknown"));
-            } else if (vol_type_ == VolumeType::HFSPLUS) {
-                rc = hfsplus_rename(hfsplus_vol_, cut_path_.c_str(), dest.c_str());
-                if (rc != 0)
-                    set_error("Move failed on HFS+ volume");
-            }
+            int rc = vol_->rename(cut_path_, dest);
+            if (rc != 0)
+                set_error("Move failed");
             if (rc == 0) {
                 status_text_ = "Moved: " + cut_name_;
                 cut_path_.clear();
@@ -1390,16 +1200,9 @@ void App::render_mkdir_popup() {
             size_t max_len = (vol_type_ == VolumeType::HFSPLUS) ? 255 : HFS_MAX_FLEN;
             if (strlen(mkdir_name_) > 0 && strlen(mkdir_name_) <= max_len) {
                 std::string full_path = current_path_ + mkdir_name_;
-                int rc = -1;
-                if (vol_type_ == VolumeType::HFS) {
-                    rc = hfs_mkdir(hfs_vol_, full_path.c_str());
-                    if (rc == -1)
-                        set_error(std::string("mkdir failed: ") + (hfs_error ? hfs_error : "unknown"));
-                } else if (vol_type_ == VolumeType::HFSPLUS) {
-                    rc = hfsplus_mkdir(hfsplus_vol_, full_path.c_str());
-                    if (rc != 0)
-                        set_error("mkdir failed on HFS+ volume");
-                }
+                int rc = vol_->mkdir(full_path);
+                if (rc != 0)
+                    set_error("mkdir failed");
                 if (rc == 0) {
                     status_text_ = "Created folder: " + std::string(mkdir_name_);
                     refresh_listing();
@@ -1444,28 +1247,12 @@ void App::render_type_creator_popup() {
             new_type[4] = '\0';
             new_creator[4] = '\0';
 
-            if (vol_type_ == VolumeType::HFS) {
-                hfsdirent ent;
-                if (hfs_stat(hfs_vol_, hfs_path.c_str(), &ent) == 0) {
-                    memcpy(ent.u.file.type, new_type, 5);
-                    memcpy(ent.u.file.creator, new_creator, 5);
-                    if (hfs_setattr(hfs_vol_, hfs_path.c_str(), &ent) == -1)
-                        set_error(std::string("Failed to set type/creator: ") + (hfs_error ? hfs_error : "unknown"));
-                    else {
-                        memcpy(e.type, new_type, 5);
-                        memcpy(e.creator, new_creator, 5);
-                        status_text_ = "Set type/creator on " + e.name;
-                    }
-                }
-            } else if (vol_type_ == VolumeType::HFSPLUS) {
-                if (hfsplus_set_type_creator(hfsplus_vol_, hfs_path.c_str(),
-                                             new_type, new_creator) != 0)
-                    set_error("Failed to set type/creator on HFS+ volume");
-                else {
-                    memcpy(e.type, new_type, 5);
-                    memcpy(e.creator, new_creator, 5);
-                    status_text_ = "Set type/creator on " + e.name;
-                }
+            if (vol_->set_type_creator(hfs_path, new_type, new_creator) != 0)
+                set_error("Failed to set type/creator");
+            else {
+                memcpy(e.type, new_type, 5);
+                memcpy(e.creator, new_creator, 5);
+                status_text_ = "Set type/creator on " + e.name;
             }
 
             show_type_creator_ = false;
@@ -1509,15 +1296,9 @@ void App::render_rename_popup() {
                 std::string new_path = current_path_ + new_name;
                 int rc = -1;
 
-                if (vol_type_ == VolumeType::HFS) {
-                    rc = hfs_rename(hfs_vol_, old_path.c_str(), new_path.c_str());
-                    if (rc == -1)
-                        set_error(std::string("Rename failed: ") + (hfs_error ? hfs_error : "unknown"));
-                } else if (vol_type_ == VolumeType::HFSPLUS) {
-                    rc = hfsplus_rename(hfsplus_vol_, old_path.c_str(), new_path.c_str());
-                    if (rc != 0)
-                        set_error("Rename failed on HFS+ volume");
-                }
+                rc = vol_->rename(old_path, new_path);
+                if (rc != 0)
+                    set_error("Rename failed");
 
                 if (rc == 0) {
                     status_text_ = "Renamed: " + entry_name + " → " + new_name;
@@ -1636,35 +1417,25 @@ void App::render_info_popup() {
             new_type[4] = '\0';
             new_creator[4] = '\0';
 
-            if (vol_type_ == VolumeType::HFS) {
-                hfsdirent ent;
-                if (hfs_stat(hfs_vol_, hfs_path.c_str(), &ent) == 0) {
-                    ent.fdflags = info_fdflags_;
-                    if (!e.is_dir) {
-                        memcpy(ent.u.file.type, new_type, 5);
-                        memcpy(ent.u.file.creator, new_creator, 5);
-                    }
-                    if (hfs_setattr(hfs_vol_, hfs_path.c_str(), &ent) == -1)
-                        set_error(std::string("Failed: ") + (hfs_error ? hfs_error : "unknown"));
-                    else {
-                        e.fdflags = info_fdflags_;
-                        if (!e.is_dir) {
-                            memcpy(e.type, new_type, 5);
-                            memcpy(e.creator, new_creator, 5);
-                        }
-                        status_text_ = "Updated info for " + e.name;
-                    }
-                }
-            } else if (vol_type_ == VolumeType::HFSPLUS) {
-                // For HFS+ we can set type/creator; flags TODO
+            {
+                bool ok = true;
                 if (!e.is_dir) {
-                    hfsplus_set_type_creator(hfsplus_vol_, hfs_path.c_str(),
-                                             new_type, new_creator);
-                    memcpy(e.type, new_type, 5);
-                    memcpy(e.creator, new_creator, 5);
+                    if (vol_->set_type_creator(hfs_path, new_type, new_creator) != 0)
+                        ok = false;
                 }
-                e.fdflags = info_fdflags_;
-                status_text_ = "Updated info for " + e.name;
+                if (ok && vol_->set_finder_flags(hfs_path, info_fdflags_) != 0)
+                    ok = false;
+
+                if (!ok) {
+                    set_error("Failed to update info");
+                } else {
+                    e.fdflags = info_fdflags_;
+                    if (!e.is_dir) {
+                        memcpy(e.type, new_type, 5);
+                        memcpy(e.creator, new_creator, 5);
+                    }
+                    status_text_ = "Updated info for " + e.name;
+                }
             }
 
             show_info_ = false;
@@ -1682,75 +1453,7 @@ void App::render_info_popup() {
 void App::run_volume_check() {
     check_log_.clear();
 
-    if (vol_type_ == VolumeType::HFS) {
-        check_log_ += "=== HFS Volume Check ===\n";
-        hfsvolent vstat;
-        if (hfs_vstat(hfs_vol_, &vstat) == 0) {
-            check_log_ += "Volume: " + std::string(vstat.name) + "\n";
-            check_log_ += "Total: " + format_size(vstat.totbytes) + "\n";
-            check_log_ += "Free: " + format_size(vstat.freebytes) + "\n";
-            check_log_ += "Files: " + std::to_string(vstat.numfiles) + "\n";
-            check_log_ += "Dirs: " + std::to_string(vstat.numdirs) + "\n";
-            if (vstat.blessed)
-                check_log_ += "Blessed folder: CNID " + std::to_string(vstat.blessed) + "\n";
-            check_log_ += "\n";
-
-            check_log_ += "Checking catalog tree...\n";
-            int file_count = 0, dir_count = 0, errors = 0;
-            std::function<void(const std::string&)> walk;
-            walk = [&](const std::string& path) {
-                hfsdir* dir = hfs_opendir(hfs_vol_, path.c_str());
-                if (!dir) { errors++; check_log_ += "  ERROR: cannot open " + path + "\n"; return; }
-                hfsdirent ent;
-                while (hfs_readdir(dir, &ent) == 0) {
-                    if (ent.flags & HFS_ISDIR) { dir_count++; walk(path + ent.name + ":"); }
-                    else { file_count++; }
-                }
-                hfs_closedir(dir);
-            };
-            walk(std::string(vstat.name) + ":");
-
-            check_log_ += "  Found " + std::to_string(file_count) + " files, "
-                        + std::to_string(dir_count) + " directories\n";
-            if ((unsigned long)file_count != vstat.numfiles)
-                check_log_ += "  WARNING: file count mismatch (MDB says " + std::to_string(vstat.numfiles) + ")\n";
-            if ((unsigned long)dir_count != vstat.numdirs)
-                check_log_ += "  WARNING: directory count mismatch (MDB says " + std::to_string(vstat.numdirs) + ")\n";
-            check_log_ += (errors == 0) ? "\nVolume appears OK.\n"
-                                        : "\n" + std::to_string(errors) + " error(s) found.\n";
-        } else {
-            check_log_ += "ERROR: Cannot read volume info\n";
-        }
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        check_log_ += "=== HFS+ Volume Check ===\n";
-        check_log_ += "Volume: " + volume_name_ + "\n";
-        check_log_ += "Total: " + format_size(vol_total_bytes_) + "\n";
-        check_log_ += "Free: " + format_size(vol_free_bytes_) + "\n";
-        if (blessed_cnid_)
-            check_log_ += "Blessed folder: CNID " + std::to_string(blessed_cnid_) + "\n";
-        check_log_ += "\nChecking catalog tree...\n";
-        int file_count = 0, dir_count = 0, errors = 0;
-        std::function<void(uint32_t)> walk;
-        walk = [&](uint32_t folder_cnid) {
-            HFSPlusDirEntry* ents = nullptr;
-            int cnt = 0;
-            if (hfsplus_list_dir_by_cnid(hfsplus_vol_, folder_cnid, &ents, &cnt) != 0) {
-                errors++;
-                check_log_ += "  ERROR: cannot list folder CNID " + std::to_string(folder_cnid) + "\n";
-                return;
-            }
-            for (int j = 0; j < cnt; j++) {
-                if (ents[j].is_dir) { dir_count++; walk(ents[j].cnid); }
-                else { file_count++; }
-            }
-            hfsplus_free_entries(ents);
-        };
-        walk(2);
-        check_log_ += "  Found " + std::to_string(file_count) + " files, "
-                    + std::to_string(dir_count) + " directories\n";
-        check_log_ += (errors == 0) ? "\nVolume appears OK.\n"
-                                    : "\n" + std::to_string(errors) + " error(s) found.\n";
-    }
+    check_log_ = vol_->check();
 }
 
 void App::render_about_popup() {
@@ -2132,43 +1835,24 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
     unsigned long total = 0;
     bool ok = false;
 
-    if (vol_type_ == VolumeType::HFS) {
-        hfsfile* f = hfs_open(hfs_vol_, hfs_path.c_str());
-        if (!f) {
-            fprintf(stderr, "hfsbrowser: export failed: %s\n", hfs_path.c_str());
-            return;
-        }
+    {
+        std::vector<uint8_t> fdata;
+        if (vol_type_ == VolumeType::HFS)
+            fdata = vol_->read_fork_by_path(hfs_path, 0);
+        else
+            fdata = vol_->read_fork((uint32_t)e.cnid, (uint32_t)e.parent_cnid, 0);
 
         FILE* out = fopen(out_path.c_str(), "wb");
-        if (!out) { hfs_close(f); return; }
+        if (!out) return;
 
-        char buf[8192];
-        unsigned long n;
-        ok = true;
-        while ((n = hfs_read(f, buf, sizeof(buf))) > 0) {
-            if (fwrite(buf, 1, n, out) != n) { ok = false; break; }
-            total += n;
-            if (e.size > 0) progress_ = (float)total / (float)e.size;
-        }
-        fclose(out);
-        hfs_close(f);
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        uint8_t* data = nullptr;
-        size_t size = 0;
-        if (hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)e.cnid, (uint32_t)e.parent_cnid, &data, &size, 0) != 0)
-            return;
-
-        FILE* out = fopen(out_path.c_str(), "wb");
-        if (!out) { free(data); return; }
-
-        if (size > 0 && data) {
-            ok = (fwrite(data, 1, size, out) == size);
-            total = (unsigned long)size;
+        if (!fdata.empty()) {
+            ok = (fwrite(fdata.data(), 1, fdata.size(), out) == fdata.size());
+            total = (unsigned long)fdata.size();
         } else {
             ok = true;
         }
         fclose(out);
-        free(data);
+        if (e.size > 0) progress_ = 1.0f;
     }
 
     if (!ok) return;
@@ -2176,16 +1860,10 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
     // Export resource fork + Finder info as AppleDouble
     std::vector<uint8_t> rsrc;
     if (e.rsize > 0) {
-        if (vol_type_ == VolumeType::HFSPLUS) {
-            uint8_t* rdata = nullptr;
-            size_t rsize = 0;
-            if (hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)e.cnid, (uint32_t)e.parent_cnid, &rdata, &rsize, 1) == 0 && rdata) {
-                rsrc.assign(rdata, rdata + rsize);
-                free(rdata);
-            }
-        } else {
-            rsrc = read_rsrc_fork(hfs_path);
-        }
+        if (vol_type_ == VolumeType::HFSPLUS)
+            rsrc = vol_->read_fork((uint32_t)e.cnid, (uint32_t)e.parent_cnid, 1);
+        else
+            rsrc = vol_->read_fork_by_path(hfs_path, 1);
     }
 
     if ((e.type[0] && strcmp(e.type, "????") != 0) || !rsrc.empty()) {
@@ -2200,53 +1878,31 @@ void App::export_folder(const std::string& hfs_dir_path, const std::string& host
                         unsigned long folder_cnid) {
     platform_mkdir(host_dir.c_str());
 
-    if (vol_type_ == VolumeType::HFS) {
-        hfsdir* dir = hfs_opendir(hfs_vol_, hfs_dir_path.c_str());
-        if (!dir) return;
+    std::vector<HBEntry> dir_entries;
+    if (vol_type_ == VolumeType::HFSPLUS && folder_cnid != 0)
+        dir_entries = vol_->list_dir((uint32_t)folder_cnid);
+    else
+        dir_entries = vol_->list_dir_by_path(hfs_dir_path);
 
-        hfsdirent ent;
-        while (hfs_readdir(dir, &ent) == 0) {
-            HFSEntry e;
-            e.name = ent.name;
-            e.is_dir = (ent.flags & HFS_ISDIR) != 0;
-            e.cnid = ent.cnid;
-            e.fdflags = ent.fdflags;
-            if (!e.is_dir) {
-                e.size = ent.u.file.dsize;
-                e.rsize = ent.u.file.rsize;
-                memcpy(e.type, ent.u.file.type, 5);
-                memcpy(e.creator, ent.u.file.creator, 5);
-            } else {
-                e.size = 0; e.rsize = 0;
-                memset(e.type, 0, 5); memset(e.creator, 0, 5);
-            }
+    for (auto& hb : dir_entries) {
+        HFSEntry e;
+        e.name = std::move(hb.name);
+        e.is_dir = hb.is_dir;
+        e.cnid = hb.cnid;
+        e.parent_cnid = hb.parent_cnid;
+        e.fdflags = hb.fdflags;
+        e.size = (unsigned long)hb.data_size;
+        e.rsize = (unsigned long)hb.rsrc_size;
+        memcpy(e.type, hb.type, 5);
+        memcpy(e.creator, hb.creator, 5);
 
-            std::string child_hfs = hfs_dir_path + e.name;
-            std::string host_name = macroman_to_utf8(e.name);
-            if (e.is_dir)
-                export_folder(child_hfs + ":", host_dir + "/" + host_name);
-            else
-                export_entry(e, child_hfs, host_dir);
-        }
-        hfs_closedir(dir);
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        HFSPlusDirEntry* plus_entries = nullptr;
-        int plus_count = 0;
-        int rc = (folder_cnid != 0)
-            ? hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)folder_cnid, &plus_entries, &plus_count)
-            : hfsplus_list_dir(hfsplus_vol_, hfs_dir_path.c_str(), &plus_entries, &plus_count);
-        if (rc != 0) return;
-
-        for (int i = 0; i < plus_count; i++) {
-            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
-
-            std::string child_hfs = hfs_dir_path + e.name;
-            if (e.is_dir)
-                export_folder(child_hfs + ":", host_dir + "/" + e.name, e.cnid);
-            else
-                export_entry(e, child_hfs, host_dir);
-        }
-        hfsplus_free_entries(plus_entries);
+        std::string child_hfs = hfs_dir_path + e.name;
+        std::string host_name = (vol_type_ == VolumeType::HFS)
+            ? macroman_to_utf8(e.name) : e.name;
+        if (e.is_dir)
+            export_folder(child_hfs + ":", host_dir + "/" + host_name, e.cnid);
+        else
+            export_entry(e, child_hfs, host_dir);
     }
 }
 
@@ -2255,59 +1911,34 @@ void App::export_folder_binhex(const std::string& hfs_dir_path, const std::strin
                                unsigned long folder_cnid) {
     platform_mkdir(host_dir.c_str());
 
-    if (vol_type_ == VolumeType::HFS) {
-        hfsdir* dir = hfs_opendir(hfs_vol_, hfs_dir_path.c_str());
-        if (!dir) return;
+    std::vector<HBEntry> dir_entries;
+    if (vol_type_ == VolumeType::HFSPLUS && folder_cnid != 0)
+        dir_entries = vol_->list_dir((uint32_t)folder_cnid);
+    else
+        dir_entries = vol_->list_dir_by_path(hfs_dir_path);
 
-        hfsdirent ent;
-        while (hfs_readdir(dir, &ent) == 0) {
-            HFSEntry e;
-            e.name = ent.name;
-            e.is_dir = (ent.flags & HFS_ISDIR) != 0;
-            e.cnid = ent.cnid;
-            e.fdflags = ent.fdflags;
-            if (!e.is_dir) {
-                e.size = ent.u.file.dsize;
-                e.rsize = ent.u.file.rsize;
-                memcpy(e.type, ent.u.file.type, 5);
-                memcpy(e.creator, ent.u.file.creator, 5);
-            } else {
-                e.size = 0; e.rsize = 0;
-                memset(e.type, 0, 5); memset(e.creator, 0, 5);
-            }
+    for (auto& hb : dir_entries) {
+        HFSEntry e;
+        e.name = std::move(hb.name);
+        e.is_dir = hb.is_dir;
+        e.cnid = hb.cnid;
+        e.parent_cnid = hb.parent_cnid;
+        e.fdflags = hb.fdflags;
+        e.size = (unsigned long)hb.data_size;
+        e.rsize = (unsigned long)hb.rsrc_size;
+        memcpy(e.type, hb.type, 5);
+        memcpy(e.creator, hb.creator, 5);
 
-            std::string child_hfs = hfs_dir_path + e.name;
-            std::string host_name = macroman_to_utf8(e.name);
-            if (e.is_dir) {
-                export_folder_binhex(child_hfs + ":", host_dir + "/" + host_name);
-            } else {
-                std::string out = host_dir + "/" + host_name + ".hqx";
-                progress_text_ = e.name;
-                export_as_binhex(out, e, child_hfs);
-            }
+        std::string child_hfs = hfs_dir_path + e.name;
+        std::string host_name = (vol_type_ == VolumeType::HFS)
+            ? macroman_to_utf8(e.name) : e.name;
+        if (e.is_dir) {
+            export_folder_binhex(child_hfs + ":", host_dir + "/" + host_name, e.cnid);
+        } else {
+            std::string out = host_dir + "/" + host_name + ".hqx";
+            progress_text_ = e.name;
+            export_as_binhex(out, e, child_hfs);
         }
-        hfs_closedir(dir);
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        HFSPlusDirEntry* plus_entries = nullptr;
-        int plus_count = 0;
-        int rc = (folder_cnid != 0)
-            ? hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)folder_cnid, &plus_entries, &plus_count)
-            : hfsplus_list_dir(hfsplus_vol_, hfs_dir_path.c_str(), &plus_entries, &plus_count);
-        if (rc != 0) return;
-
-        for (int i = 0; i < plus_count; i++) {
-            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
-
-            std::string child_hfs = hfs_dir_path + e.name;
-            if (e.is_dir) {
-                export_folder_binhex(child_hfs + ":", host_dir + "/" + e.name, e.cnid);
-            } else {
-                std::string out = host_dir + "/" + e.name + ".hqx";
-                progress_text_ = e.name;
-                export_as_binhex(out, e, child_hfs);
-            }
-        }
-        hfsplus_free_entries(plus_entries);
     }
 }
 
@@ -2327,11 +1958,7 @@ void App::import_host_dir(const std::string& host_dir) {
 
     // Create folder on the image
     std::string hfs_folder = current_path_ + dirname;
-    int mkdir_rc = -1;
-    if (vol_type_ == VolumeType::HFS)
-        mkdir_rc = hfs_mkdir(hfs_vol_, hfs_folder.c_str());
-    else if (vol_type_ == VolumeType::HFSPLUS)
-        mkdir_rc = hfsplus_mkdir(hfsplus_vol_, hfs_folder.c_str());
+    int mkdir_rc = vol_->mkdir(hfs_folder);
     if (mkdir_rc != 0) {
         fprintf(stderr, "hfsbrowser: failed to create folder %s\n", hfs_folder.c_str());
         return;
@@ -2341,7 +1968,7 @@ void App::import_host_dir(const std::string& host_dir) {
     std::string saved_path = current_path_;
     current_path_ = hfs_folder + ":";
     if (vol_type_ == VolumeType::HFS)
-        hfs_chdir(hfs_vol_, current_path_.c_str());
+        vol_->chdir(current_path_);
 
     for (const auto& entry : fs::directory_iterator(host_dir, ec)) {
         if (ec) break;
@@ -2358,7 +1985,7 @@ void App::import_host_dir(const std::string& host_dir) {
     // Restore path
     current_path_ = saved_path;
     if (vol_type_ == VolumeType::HFS)
-        hfs_chdir(hfs_vol_, current_path_.c_str());
+        vol_->chdir(current_path_);
 }
 
 void App::copy_from_hfs_impl(const std::string& host_path) {
@@ -2459,93 +2086,7 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
         }
     }
 
-    if (vol_type_ == VolumeType::HFS) {
-        FILE* in = fopen(host_path.c_str(), "rb");
-        if (!in) {
-            set_error("Failed to open file: " + host_path);
-            return;
-        }
-
-        // Detect type/creator: try xattr FinderInfo, then magic bytes, then FAF extension
-        TypeCreatorResult tcr;
-        const char* type = "????";
-        const char* creator = "????";
-
-        // Try reading FinderInfo xattr from host file
-        uint8_t fi_buf[32];
-        bool got_xattr = false;
-        if (platform_getxattr(host_path.c_str(), "com.apple.FinderInfo", fi_buf, 32) >= 32) {
-            memcpy(tcr.type, fi_buf, 4); tcr.type[4] = '\0';
-            memcpy(tcr.creator, fi_buf + 4, 4); tcr.creator[4] = '\0';
-            if (tcr.type[0] && strcmp(tcr.type, "????") != 0) {
-                type = tcr.type;
-                creator = tcr.creator;
-                got_xattr = true;
-            }
-        }
-
-        if (!got_xattr) {
-            // Read first 1024 bytes for magic detection
-            uint8_t magic_buf[1024];
-            size_t magic_read = fread(magic_buf, 1, sizeof(magic_buf), in);
-            fseek(in, 0, SEEK_SET);
-
-            if (magic_read > 0 && detect_type_creator_magic(magic_buf, magic_read, &tcr)) {
-                type = tcr.type;
-                creator = tcr.creator;
-            } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
-                type = tcr.type;
-                creator = tcr.creator;
-            }
-        }
-
-        hfsfile* f = hfs_create(hfs_vol_, hfs_path.c_str(), type, creator);
-        if (!f) {
-            fclose(in);
-            set_error(std::string("Failed to create HFS file: ") + (hfs_error ? hfs_error : "unknown"));
-            return;
-        }
-
-        char buf[8192];
-        size_t n;
-        bool ok = true;
-        unsigned long total = 0;
-
-        while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-            unsigned long written = hfs_write(f, buf, (unsigned long)n);
-            if (written != (unsigned long)n) {
-                ok = false;
-                break;
-            }
-            total += written;
-        }
-
-        hfs_close(f);
-        fclose(in);
-
-        if (ok) {
-            // Try to import resource fork from xattr
-            {
-                // First query size, then read
-                int rsrc_size = platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", nullptr, 0);
-                if (rsrc_size > 0) {
-                    std::vector<uint8_t> rsrc(rsrc_size);
-                    platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", rsrc.data(), rsrc.size());
-                    hfsfile* rf = hfs_open(hfs_vol_, hfs_path.c_str());
-                    if (rf) {
-                        hfs_setfork(rf, 1);
-                        hfs_write(rf, rsrc.data(), rsrc_size);
-                        hfs_close(rf);
-                    }
-                }
-            }
-            status_text_ = "Imported: " + filename + " (" + format_size(total) + ")";
-            refresh_listing();
-        } else {
-            set_error("Write error while importing " + filename);
-        }
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        // Read file into memory then write to HFS+
+    {
         FILE* in = fopen(host_path.c_str(), "rb");
         if (!in) {
             set_error("Failed to open file: " + host_path);
@@ -2572,9 +2113,58 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
         }
         fclose(in);
 
-        if (hfsplus_write_file(hfsplus_vol_, hfs_path.c_str(), data.data(), data.size()) != 0) {
-            set_error("Failed to write to HFS+ volume: " + filename);
-            return;
+        if (vol_type_ == VolumeType::HFS) {
+            // Detect type/creator: try xattr FinderInfo, then magic bytes, then FAF extension
+            TypeCreatorResult tcr;
+            const char* type = "????";
+            const char* creator = "????";
+
+            // Try reading FinderInfo xattr from host file
+            uint8_t fi_buf[32];
+            bool got_xattr = false;
+            if (platform_getxattr(host_path.c_str(), "com.apple.FinderInfo", fi_buf, 32) >= 32) {
+                memcpy(tcr.type, fi_buf, 4); tcr.type[4] = '\0';
+                memcpy(tcr.creator, fi_buf + 4, 4); tcr.creator[4] = '\0';
+                if (tcr.type[0] && strcmp(tcr.type, "????") != 0) {
+                    type = tcr.type;
+                    creator = tcr.creator;
+                    got_xattr = true;
+                }
+            }
+
+            if (!got_xattr) {
+                if (file_size > 0) {
+                    size_t check = (size_t)file_size > 1024 ? 1024 : (size_t)file_size;
+                    if (!detect_type_creator_magic(data.data(), check, &tcr)) {
+                        detect_type_creator_ext(filename.c_str(), &tcr);
+                    }
+                    type = tcr.type;
+                    creator = tcr.creator;
+                } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
+                    type = tcr.type;
+                    creator = tcr.creator;
+                }
+            }
+
+            if (vol_->create_file(hfs_path, type, creator, data.data(), data.size()) != 0) {
+                set_error("Failed to create HFS file");
+                show_progress_ = false;
+                return;
+            }
+
+            // Try to import resource fork from xattr
+            int rsrc_size = platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", nullptr, 0);
+            if (rsrc_size > 0) {
+                std::vector<uint8_t> rsrc(rsrc_size);
+                platform_getxattr(host_path.c_str(), "com.apple.ResourceFork", rsrc.data(), rsrc.size());
+                vol_->write_rsrc_fork(hfs_path, rsrc.data(), rsrc.size());
+            }
+        } else {
+            if (vol_->write_file(hfs_path, data.data(), data.size()) != 0) {
+                set_error("Failed to write to volume: " + filename);
+                show_progress_ = false;
+                return;
+            }
         }
 
         status_text_ = "Imported: " + filename + " (" + format_size((unsigned long)file_size) + ")";
@@ -2628,49 +2218,26 @@ bool App::export_as_binhex(const std::string& out_path, const HFSEntry& entry,
     bh_insertcrc();
 
     // Data fork
-    if (vol_type_ == VolumeType::HFS) {
-        hfsfile* f = hfs_open(hfs_vol_, hfs_path.c_str());
-        if (f) {
-            char buf[8192];
-            unsigned long n;
-            while ((n = hfs_read(f, buf, sizeof(buf))) > 0 && n != (unsigned long)-1)
-                if (bh_insert(buf, (int)n) == -1) break;
-            hfs_close(f);
-        }
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        uint8_t* data = nullptr;
-        size_t size = 0;
-        int rc = hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, &data, &size, 0);
-        if (rc == 0 && data && size > 0 && size <= (size_t)INT_MAX) {
-            bh_insert(data, (int)size);
-            free(data);
-        } else {
-            free(data);
-        }
+    {
+        std::vector<uint8_t> fdata;
+        if (vol_type_ == VolumeType::HFS)
+            fdata = vol_->read_fork_by_path(hfs_path, 0);
+        else
+            fdata = vol_->read_fork((uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, 0);
+        if (!fdata.empty() && fdata.size() <= (size_t)INT_MAX)
+            bh_insert(fdata.data(), (int)fdata.size());
     }
     bh_insertcrc();
 
     // Resource fork
-    if (vol_type_ == VolumeType::HFS) {
-        hfsfile* f = hfs_open(hfs_vol_, hfs_path.c_str());
-        if (f) {
-            hfs_setfork(f, 1);
-            char buf[8192];
-            unsigned long n;
-            while ((n = hfs_read(f, buf, sizeof(buf))) > 0 && n != (unsigned long)-1)
-                if (bh_insert(buf, (int)n) == -1) break;
-            hfs_close(f);
-        }
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        uint8_t* data = nullptr;
-        size_t size = 0;
-        int rc = hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, &data, &size, 1);
-        if (rc == 0 && data && size > 0 && size <= (size_t)INT_MAX) {
-            bh_insert(data, (int)size);
-            free(data);
-        } else {
-            free(data);
-        }
+    {
+        std::vector<uint8_t> rdata;
+        if (vol_type_ == VolumeType::HFS)
+            rdata = vol_->read_fork_by_path(hfs_path, 1);
+        else
+            rdata = vol_->read_fork((uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, 1);
+        if (!rdata.empty() && rdata.size() <= (size_t)INT_MAX)
+            bh_insert(rdata.data(), (int)rdata.size());
     }
     bh_insertcrc();
 
@@ -2756,37 +2323,23 @@ bool App::import_from_binhex(const std::string& host_path) {
     std::string hfs_path = current_path_ + hfs_name;
 
     if (vol_type_ == VolumeType::HFS) {
-        hfsfile* f = hfs_create(hfs_vol_, hfs_path.c_str(), type, creator);
-        if (!f) {
-            set_error(std::string("Failed to create file: ") + (hfs_error ? hfs_error : "unknown"));
+        if (vol_->create_file(hfs_path, type, creator, data_fork.data(), dlen) != 0) {
+            set_error("Failed to create file");
             return false;
         }
 
-        if (dlen > 0)
-            hfs_write(f, data_fork.data(), dlen);
-        hfs_close(f);
-
-        if (rlen > 0) {
-            f = hfs_open(hfs_vol_, hfs_path.c_str());
-            if (f) {
-                hfs_setfork(f, 1);
-                hfs_write(f, rsrc_fork.data(), rlen);
-                hfs_close(f);
-            }
-        }
+        if (rlen > 0)
+            vol_->write_rsrc_fork(hfs_path, rsrc_fork.data(), rlen);
     } else if (vol_type_ == VolumeType::HFSPLUS) {
-        if (hfsplus_write_file(hfsplus_vol_, hfs_path.c_str(),
-                               data_fork.data(), dlen) != 0) {
-            set_error("Failed to create file on HFS+ volume");
+        if (vol_->write_file(hfs_path, data_fork.data(), dlen) != 0) {
+            set_error("Failed to create file on volume");
             return false;
         }
 
-        if (rlen > 0) {
-            hfsplus_write_rsrc_fork(hfsplus_vol_, hfs_path.c_str(),
-                                    rsrc_fork.data(), rlen);
-        }
+        if (rlen > 0)
+            vol_->write_rsrc_fork(hfs_path, rsrc_fork.data(), rlen);
 
-        hfsplus_set_type_creator(hfsplus_vol_, hfs_path.c_str(), type, creator);
+        vol_->set_type_creator(hfs_path, type, creator);
     }
 
     status_text_ = "Imported BinHex: " + hfs_name + " (" + format_size(dlen) + " data, " + format_size(rlen) + " rsrc)";
@@ -2809,13 +2362,8 @@ bool App::export_icon_png(const std::string& out_path, const HFSEntry& /* entry 
 }
 
 bool App::delete_recursive(const std::string& hfs_path, bool is_dir) {
-    if (!is_dir) {
-        if (vol_type_ == VolumeType::HFS)
-            return hfs_delete(hfs_vol_, hfs_path.c_str()) == 0;
-        else if (vol_type_ == VolumeType::HFSPLUS)
-            return hfsplus_delete(hfsplus_vol_, hfs_path.c_str()) == 0;
-        return false;
-    }
+    if (!is_dir)
+        return vol_->delete_file(hfs_path) == 0;
 
     // Recursively delete directory contents first
     std::string dir_path = hfs_path;
@@ -2823,54 +2371,29 @@ bool App::delete_recursive(const std::string& hfs_path, bool is_dir) {
     if (!dir_path.empty() && dir_path.back() != ':')
         dir_path += ':';
 
-    if (vol_type_ == VolumeType::HFS) {
-        hfsdir* dir = hfs_opendir(hfs_vol_, dir_path.c_str());
-        if (!dir) return false;
-
-        // Collect entries first (can't delete while iterating)
-        std::vector<std::pair<std::string, bool>> children;
-        hfsdirent ent;
-        while (hfs_readdir(dir, &ent) == 0) {
-            bool child_is_dir = (ent.flags & HFS_ISDIR) != 0;
-            children.push_back({dir_path + ent.name, child_is_dir});
+    // Find the folder's CNID from current entries (for HFS+ efficiency)
+    unsigned long folder_cnid = 0;
+    for (const auto& ent : entries_) {
+        std::string ent_path = current_path_ + ent.name;
+        if (ent_path == hfs_path && ent.is_dir) {
+            folder_cnid = ent.cnid;
+            break;
         }
-        hfs_closedir(dir);
-
-        for (auto& [child_path, child_is_dir] : children) {
-            if (!delete_recursive(child_path, child_is_dir))
-                return false;
-        }
-
-        return hfs_rmdir(hfs_vol_, hfs_path.c_str()) == 0;
-    } else if (vol_type_ == VolumeType::HFSPLUS) {
-        // Find the folder's CNID from current entries
-        unsigned long folder_cnid = 0;
-        for (const auto& ent : entries_) {
-            std::string ent_path = current_path_ + ent.name;
-            if (ent_path == hfs_path && ent.is_dir) {
-                folder_cnid = ent.cnid;
-                break;
-            }
-        }
-
-        HFSPlusDirEntry* plus_entries = nullptr;
-        int plus_count = 0;
-        int rc = (folder_cnid != 0)
-            ? hfsplus_list_dir_by_cnid(hfsplus_vol_, (uint32_t)folder_cnid, &plus_entries, &plus_count)
-            : hfsplus_list_dir(hfsplus_vol_, dir_path.c_str(), &plus_entries, &plus_count);
-        if (rc != 0) return false;
-
-        bool ok = true;
-        for (int i = 0; i < plus_count && ok; i++) {
-            std::string child_path = dir_path + plus_entries[i].name;
-            ok = delete_recursive(child_path, plus_entries[i].is_dir);
-        }
-        hfsplus_free_entries(plus_entries);
-
-        if (!ok) return false;
-        return hfsplus_delete(hfsplus_vol_, hfs_path.c_str()) == 0;
     }
-    return false;
+
+    std::vector<HBEntry> dir_entries;
+    if (vol_type_ == VolumeType::HFSPLUS && folder_cnid != 0)
+        dir_entries = vol_->list_dir((uint32_t)folder_cnid);
+    else
+        dir_entries = vol_->list_dir_by_path(dir_path);
+
+    for (auto& de : dir_entries) {
+        std::string child_path = dir_path + de.name;
+        if (!delete_recursive(child_path, de.is_dir))
+            return false;
+    }
+
+    return vol_->rmdir(hfs_path) == 0;
 }
 
 void App::delete_selected() {}
