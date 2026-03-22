@@ -381,6 +381,12 @@ public:
         };
         walk(2, "/");
         log += "  " + std::to_string(fc) + " files, " + std::to_string(dc) + " dirs\n";
+
+        // Verify and repair free block count
+        log += "\nChecking allocation bitmap...\n";
+        uint64_t repaired_free = hfsplus_repair_free_count(vol_, &log);
+        if (repaired_free > 0) free_ = repaired_free;
+
         if (errors == 0)
             log += "\nVolume appears OK.\n";
         else

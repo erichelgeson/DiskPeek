@@ -694,6 +694,45 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
     return ok ? 0 : -1;
 }
 
+uint64_t hfsplus_repair_free_count(HFSPlusVolume* vol, std::string* log) {
+    if (!vol || !vol->volume) return 0;
+
+    uint32_t totalBlocks = vol->volume->volumeHeader->totalBlocks;
+    uint32_t headerFree = vol->volume->volumeHeader->freeBlocks;
+    uint64_t blockSize = vol->volume->volumeHeader->blockSize;
+
+    // Scan allocation bitmap to count actually free blocks
+    uint32_t actualFree = 0;
+    for (uint32_t b = 0; b < totalBlocks; b++) {
+        if (!isBlockUsed(vol->volume, b))
+            actualFree++;
+    }
+
+    if (log) {
+        *log += "  Header says: " + std::to_string(headerFree) + " free blocks ("
+              + std::to_string(headerFree * blockSize / (1024*1024)) + " MB)\n";
+        *log += "  Bitmap says: " + std::to_string(actualFree) + " free blocks ("
+              + std::to_string(actualFree * blockSize / (1024*1024)) + " MB)\n";
+    }
+
+    if (headerFree != actualFree) {
+        if (log) *log += "  WARNING: free block count mismatch! Repairing...\n";
+        vol->volume->volumeHeader->freeBlocks = actualFree;
+
+        PANIC_PROTECT_BEGIN()
+            if (log) *log += "  ERROR: failed to update volume header\n";
+            return (uint64_t)actualFree * blockSize;
+        PANIC_PROTECT_END()
+
+        updateVolume(vol->volume);
+        s_panic_armed = false;
+
+        if (log) *log += "  Fixed: freeBlocks updated to " + std::to_string(actualFree) + "\n";
+    }
+
+    return (uint64_t)actualFree * blockSize;
+}
+
 int hfsplus_force_delete(HFSPlusVolume* vol, const char* path) {
     if (!vol || !vol->volume || vol->readonly) return -1;
 

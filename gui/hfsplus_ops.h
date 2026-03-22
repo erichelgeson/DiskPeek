@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 
 struct HFSPlusVolume;
 
@@ -80,6 +81,10 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
 // Get/set the blessed (boot) system folder CNID.
 uint32_t hfsplus_get_blessed(HFSPlusVolume* vol);
 int hfsplus_set_blessed(HFSPlusVolume* vol, uint32_t folder_cnid);
+
+// Recalculate and fix the free block count by scanning the allocation bitmap.
+// Returns the corrected free space in bytes, or 0 on failure.
+uint64_t hfsplus_repair_free_count(HFSPlusVolume* vol, std::string* log);
 
 // Force-delete a file by removing its catalog entry without freeing extents.
 // Use when normal delete fails due to corrupt extents.
