@@ -343,21 +343,44 @@ public:
     std::string check() override {
         std::string log;
         log += "=== HFS+ Volume Check ===\n";
-        log += "Volume: " + name_ + "\n\n";
-        log += "Checking catalog tree...\n";
+        log += "Volume: " + name_ + "\n";
+        log += "Total: " + std::to_string(total_ / (1024*1024)) + " MB, Free: "
+             + std::to_string(free_ / (1024*1024)) + " MB\n";
+        if (blessed_) log += "Blessed folder: CNID " + std::to_string(blessed_) + "\n";
+        log += "\nChecking catalog tree...\n";
         int fc = 0, dc = 0, errors = 0;
-        std::function<void(uint32_t)> walk;
-        walk = [&](uint32_t fcnid) {
-            auto entries = list_dir(fcnid);
-            if (entries.empty() && fcnid != 2) errors++;
-            for (auto& e : entries) {
-                if (e.is_dir) { dc++; walk(e.cnid); }
-                else fc++;
+        std::function<void(uint32_t, const std::string&)> walk;
+        walk = [&](uint32_t fcnid, const std::string& path) {
+            HFSPlusDirEntry* ents = nullptr;
+            int cnt = 0;
+            int rc = hfsplus_list_dir_by_cnid(vol_, fcnid, &ents, &cnt);
+            if (rc != 0) {
+                errors++;
+                log += "  ERROR: cannot read folder CNID " + std::to_string(fcnid)
+                     + " (" + path + ")\n";
+                return;
             }
+            for (int i = 0; i < cnt; i++) {
+                if (ents[i].is_dir) {
+                    dc++;
+                    walk(ents[i].cnid, path + ents[i].name + "/");
+                } else {
+                    fc++;
+                    // Check for files with zero CNID (corruption)
+                    if (ents[i].cnid == 0) {
+                        errors++;
+                        log += "  ERROR: file with CNID 0: " + path + ents[i].name + "\n";
+                    }
+                }
+            }
+            hfsplus_free_entries(ents);
         };
-        walk(2);
+        walk(2, "/");
         log += "  " + std::to_string(fc) + " files, " + std::to_string(dc) + " dirs\n";
-        log += errors ? "\n" + std::to_string(errors) + " error(s)\n" : "\nOK\n";
+        if (errors == 0)
+            log += "\nVolume appears OK.\n";
+        else
+            log += "\n" + std::to_string(errors) + " error(s) found.\n";
         return log;
     }
 
