@@ -162,6 +162,11 @@ private:
     void set_error(const std::string& msg);
     static const TypeCreatorMap* lookup_type_creator(const char* filename);
 
+    // Splash image (DogCow)
+    GLuint dogcow_tex_ = 0;
+    int dogcow_w_ = 0, dogcow_h_ = 0;
+    void load_dogcow();
+
     // State
     bool quit_requested_ = false;
     std::string status_text_;

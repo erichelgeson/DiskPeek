@@ -180,16 +180,38 @@ void App::draw_file_icon(ImVec2 pos, float size) {
 App::App() {}
 App::~App() { shutdown(); }
 
+void App::load_dogcow() {
+    SDL_Surface* surf = SDL_LoadBMP("lib/fonts/dogcow.bmp");
+    if (!surf) return;
+
+    // Convert to RGBA32
+    SDL_Surface* rgba = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(surf);
+    if (!rgba) return;
+
+    dogcow_w_ = rgba->w;
+    dogcow_h_ = rgba->h;
+
+    glGenTextures(1, &dogcow_tex_);
+    glBindTexture(GL_TEXTURE_2D, dogcow_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rgba->w, rgba->h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba->pixels);
+
+    SDL_DestroySurface(rgba);
+}
+
 void App::init() {
     status_text_ = "Open an HFS disk image to begin (or drag & drop)";
     memset(search_buf_, 0, sizeof(search_buf_));
-
-    const char* home = getenv("HOME");
+    load_dogcow();
 }
 
 void App::shutdown() {
     cleanup_icons();
     close_image();
+    if (dogcow_tex_) { glDeleteTextures(1, &dogcow_tex_); dogcow_tex_ = 0; }
 }
 
 // --- Image open/close ---
@@ -765,6 +787,18 @@ void App::render_path_bar() {
             ImGui::PopStyleColor();
         }
     }
+
+    // Search bar — right-aligned on same line as path
+    float search_width = 180;
+    float avail = ImGui::GetContentRegionAvail().x;
+    ImGui::SameLine(avail - search_width - 20);
+    ImGui::SetNextItemWidth(search_width);
+    ImGui::InputTextWithHint("##search", "Search...", search_buf_, sizeof(search_buf_));
+    if (search_buf_[0]) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("X##clr"))
+            memset(search_buf_, 0, sizeof(search_buf_));
+    }
 }
 
 void App::render_file_list() {
@@ -774,18 +808,39 @@ void App::render_file_list() {
     ImGui::BeginChild("FileList", ImVec2(0, avail_h), false);
 
     if (!has_volume()) {
-        ImGui::TextDisabled("Open an HFS disk image to browse files");
+        // Show DogCow splash centered in the area
+        ImVec2 region = ImGui::GetContentRegionAvail();
+        if (dogcow_tex_ && dogcow_w_ > 0) {
+            // Scale to fit, maintaining aspect ratio, max 50% of area
+            float max_w = region.x * 0.5f;
+            float max_h = region.y * 0.5f;
+            float scale_img = std::min(max_w / dogcow_w_, max_h / dogcow_h_);
+            if (scale_img > 4.0f) scale_img = 4.0f;  // don't go crazy
+            float img_w = dogcow_w_ * scale_img;
+            float img_h = dogcow_h_ * scale_img;
+
+            ImVec2 pos = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(pos.x + (region.x - img_w) * 0.5f,
+                                       pos.y + (region.y - img_h) * 0.4f));
+            ImGui::Image((ImTextureID)(intptr_t)dogcow_tex_, ImVec2(img_w, img_h));
+
+            // Center text below
+            const char* msg = "Open an HFS disk image to begin";
+            ImVec2 text_sz = ImGui::CalcTextSize(msg);
+            ImGui::SetCursorPosX(pos.x + (region.x - text_sz.x) * 0.5f);
+            ImGui::TextDisabled("%s", msg);
+
+            const char* hint = "(drag & drop or click Open Image)";
+            text_sz = ImGui::CalcTextSize(hint);
+            ImGui::SetCursorPosX(pos.x + (region.x - text_sz.x) * 0.5f);
+            ImGui::TextDisabled("%s", hint);
+        } else {
+            ImGui::TextDisabled("Open an HFS disk image to browse files");
+        }
         ImGui::EndChild();
         return;
     }
 
-    // Search bar
-    ImGui::SetNextItemWidth(200);
-    ImGui::InputTextWithHint("##search", "Search...", search_buf_, sizeof(search_buf_));
-    ImGui::SameLine();
-    if (search_buf_[0] && ImGui::SmallButton("X##clearsearch")) {
-        memset(search_buf_, 0, sizeof(search_buf_));
-    }
 
     // Build filtered index list for search
     std::vector<int> visible;
@@ -1181,7 +1236,7 @@ void App::render_file_list() {
         if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
             navigate_up();
         }
-        if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_X) && has_sel) {
+        if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && (ImGui::IsKeyPressed(ImGuiKey_X) || ImGui::IsKeyPressed(ImGuiKey_C)) && has_sel) {
             const HFSEntry& e = entries_[selected_entry_];
             cut_path_ = current_path_ + e.name;
             cut_name_ = e.name;
