@@ -5,7 +5,7 @@ pkgs.mkShell {
     meson
     ninja
     pkg-config
-    SDL2
+    sdl3
     libGL
     xorg.libX11
     zlib

@@ -5,12 +5,13 @@
 #include "app.h"
 #include "imgui.h"
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_opengl.h>
 #include <cstring>
 #include <algorithm>
 #include <cstdio>
 #include <cerrno>
+#include <climits>
 #include <filesystem>
 #include <functional>
 

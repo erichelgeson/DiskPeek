@@ -1,19 +1,21 @@
 /*
  * HFS Browser - GUI for browsing Macintosh HFS disk images
- * Main entry point with SDL2/OpenGL/ImGui setup
+ * Main entry point with SDL3/OpenGL/ImGui setup
  */
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_opengl.h>
 
 #include "imgui.h"
-#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
 
 #include "app.h"
 
+#include <cstring>
+
 int main(int, char**) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "Error: SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -26,15 +28,10 @@ int main(int, char**) {
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
-    SDL_WindowFlags window_flags = (SDL_WindowFlags)(
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
-    );
-
     SDL_Window* window = SDL_CreateWindow(
         "HFS Browser",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         1024, 700,
-        window_flags
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
 
     if (!window) {
@@ -61,23 +58,7 @@ int main(int, char**) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Scale UI based on display DPI
-    float scale = 1.0f;
-#if SDL_VERSION_ATLEAST(2, 26, 0)
-    // SDL 2.26+ deprecated SDL_GetDisplayDPI; use window pixel size ratio
-    {
-        int ww, wh, dw, dh;
-        SDL_GetWindowSize(window, &ww, &wh);
-        SDL_GL_GetDrawableSize(window, &dw, &dh);
-        if (ww > 0 && dw > 0)
-            scale = (float)dw / (float)ww;
-    }
-#else
-    {
-        float dpi = 0;
-        if (SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), &dpi, nullptr, nullptr) == 0 && dpi > 0)
-            scale = dpi / 96.0f;
-    }
-#endif
+    float scale = SDL_GetWindowDisplayScale(window);
     if (scale < 1.0f) scale = 1.0f;
 
     // Classic Mac OS 6/7 inspired theme
@@ -85,19 +66,19 @@ int main(int, char**) {
     ImVec4* c = style.Colors;
 
     // Window
-    c[ImGuiCol_WindowBg]            = ImVec4(0.93f, 0.93f, 0.93f, 1.00f); // light gray desktop
-    c[ImGuiCol_ChildBg]             = ImVec4(1.00f, 1.00f, 1.00f, 1.00f); // white content area
+    c[ImGuiCol_WindowBg]            = ImVec4(0.93f, 0.93f, 0.93f, 1.00f);
+    c[ImGuiCol_ChildBg]             = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
     c[ImGuiCol_PopupBg]             = ImVec4(1.00f, 1.00f, 1.00f, 0.98f);
 
     // Text
-    c[ImGuiCol_Text]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f); // black text
+    c[ImGuiCol_Text]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
     c[ImGuiCol_TextDisabled]        = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
 
-    // Borders — dark outer, white inner bevel
+    // Borders
     c[ImGuiCol_Border]              = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
     c[ImGuiCol_BorderShadow]        = ImVec4(1.00f, 1.00f, 1.00f, 0.40f);
 
-    // Frames (input fields, checkboxes)
+    // Frames
     c[ImGuiCol_FrameBg]             = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
     c[ImGuiCol_FrameBgHovered]      = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
     c[ImGuiCol_FrameBgActive]       = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
@@ -108,12 +89,12 @@ int main(int, char**) {
     c[ImGuiCol_TitleBgCollapsed]    = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
     c[ImGuiCol_MenuBarBg]           = ImVec4(0.86f, 0.86f, 0.86f, 1.00f);
 
-    // Buttons — beveled 3D look
+    // Buttons
     c[ImGuiCol_Button]              = ImVec4(0.83f, 0.83f, 0.83f, 1.00f);
     c[ImGuiCol_ButtonHovered]       = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
     c[ImGuiCol_ButtonActive]        = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
 
-    // Headers (table headers, collapsing headers)
+    // Headers
     c[ImGuiCol_Header]              = ImVec4(0.00f, 0.00f, 0.00f, 0.15f);
     c[ImGuiCol_HeaderHovered]       = ImVec4(0.00f, 0.00f, 0.00f, 0.25f);
     c[ImGuiCol_HeaderActive]        = ImVec4(0.00f, 0.00f, 0.00f, 0.35f);
@@ -129,7 +110,7 @@ int main(int, char**) {
     c[ImGuiCol_SeparatorHovered]    = ImVec4(0.00f, 0.00f, 0.00f, 0.50f);
     c[ImGuiCol_SeparatorActive]     = ImVec4(0.00f, 0.00f, 0.00f, 0.70f);
 
-    // Selection (classic Mac highlight = dark blue/black inversion)
+    // Selection
     c[ImGuiCol_TextSelectedBg]      = ImVec4(0.00f, 0.00f, 0.50f, 0.35f);
 
     // Table
@@ -144,13 +125,13 @@ int main(int, char**) {
     c[ImGuiCol_SliderGrab]          = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
     c[ImGuiCol_SliderGrabActive]    = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
 
-    // Style tweaks for Mac OS look
-    style.WindowRounding    = 0.0f;  // sharp corners like classic Mac
+    // Style tweaks
+    style.WindowRounding    = 0.0f;
     style.FrameRounding     = 0.0f;
     style.GrabRounding      = 0.0f;
     style.ScrollbarRounding = 0.0f;
     style.TabRounding       = 0.0f;
-    style.FrameBorderSize   = 1.0f;  // visible borders on controls
+    style.FrameBorderSize   = 1.0f;
     style.WindowBorderSize  = 1.0f;
     style.PopupBorderSize   = 1.0f;
     style.FramePadding      = ImVec2(6, 3);
@@ -160,7 +141,7 @@ int main(int, char**) {
     io.Fonts->AddFontDefault();
     io.FontGlobalScale = scale;
 
-    ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
+    ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 330");
 
     App app;
@@ -170,32 +151,33 @@ int main(int, char**) {
     while (!done) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            ImGui_ImplSDL2_ProcessEvent(&event);
+            ImGui_ImplSDL3_ProcessEvent(&event);
 
-            if (event.type == SDL_QUIT)
+            if (event.type == SDL_EVENT_QUIT)
                 done = true;
-            if (event.type == SDL_WINDOWEVENT &&
-                event.window.event == SDL_WINDOWEVENT_CLOSE &&
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                 event.window.windowID == SDL_GetWindowID(window))
                 done = true;
-            if (event.type == SDL_DROPFILE) {
-                // Check if this looks like a disk image — open it instead of importing
-                const char* ext = strrchr(event.drop.file, '.');
-                bool is_image = ext && strcasecmp(ext, ".hda") == 0;
+            if (event.type == SDL_EVENT_DROP_FILE) {
+                const char* dropped = event.drop.data;
+                if (dropped) {
+                    const char* ext = strrchr(dropped, '.');
+                    bool is_image = ext && strcasecmp(ext, ".hda") == 0;
 
-                if (is_image) {
-                    app.open_image(event.drop.file);
-                } else if (app.has_volume()) {
-                    app.import_file(event.drop.file);
-                } else {
-                    app.open_image(event.drop.file);
+                    if (is_image) {
+                        app.open_image(dropped);
+                    } else if (app.has_volume()) {
+                        app.import_file(dropped);
+                    } else {
+                        app.open_image(dropped);
+                    }
                 }
-                SDL_free(event.drop.file);
+                // SDL3: drop.data is managed by SDL, do not free
             }
         }
 
         ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
         app.render();
@@ -205,7 +187,7 @@ int main(int, char**) {
 
         ImGui::Render();
         int display_w, display_h;
-        SDL_GetWindowSize(window, &display_w, &display_h);
+        SDL_GetWindowSizeInPixels(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(0.93f, 0.93f, 0.93f, 1.00f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -216,10 +198,10 @@ int main(int, char**) {
     app.shutdown();
 
     ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    SDL_GL_DeleteContext(gl_context);
+    SDL_GL_DestroyContext(gl_context);
     SDL_DestroyWindow(window);
     SDL_Quit();
 

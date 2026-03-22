@@ -16,7 +16,7 @@
             meson
             ninja
             pkg-config
-            SDL2
+            sdl3
             libGL
             libx11
             zlib

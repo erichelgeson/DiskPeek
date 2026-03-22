@@ -104,13 +104,12 @@ libdmg_hfsplus = static_library('dmg-hfsplus',
 )
 
 # GUI application
-sdl2_dep = dependency('sdl2')
+sdl3_dep = dependency('sdl3')
 gl_dep = dependency('gl')
 thread_dep = dependency('threads')
 
 gui_link_args = []
 if host_machine.system() == 'darwin'
-  sdl2_dep = dependency('sdl2', static : true)
   gui_link_args += [
     '-framework', 'CoreAudio',
     '-framework', 'AudioToolbox',
@@ -133,7 +132,7 @@ imgui_sources = files(
   'lib/imgui/imgui_draw.cpp',
   'lib/imgui/imgui_tables.cpp',
   'lib/imgui/imgui_widgets.cpp',
-  'lib/imgui/backends/imgui_impl_sdl2.cpp',
+  'lib/imgui/backends/imgui_impl_sdl3.cpp',
   'lib/imgui/backends/imgui_impl_opengl3.cpp',
 )
 
@@ -173,7 +172,7 @@ gui_sources = files(
 executable('hfsbrowser',
   gui_sources + imgui_sources,
   include_directories : [libhfs_inc, libdmg_hfsplus_inc, hfsbrowse_inc, imgui_inc, include_directories('gui'), include_directories('.')],
-  dependencies : [sdl2_dep, gl_dep, thread_dep, zlib_dep],
+  dependencies : [sdl3_dep, gl_dep, thread_dep, zlib_dep],
   link_with : [libhfs, libdmg_hfsplus, binhex_lib, hfsbrowse_lib],
   link_args : gui_link_args,
   install : true,
