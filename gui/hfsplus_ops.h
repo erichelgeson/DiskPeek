@@ -82,7 +82,10 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
 uint32_t hfsplus_get_blessed(HFSPlusVolume* vol);
 int hfsplus_set_blessed(HFSPlusVolume* vol, uint32_t folder_cnid);
 
-// Recalculate and fix the free block count by scanning the allocation bitmap.
+// Check and repair free space:
+// 1. Scans all file extents to find which blocks are actually in use
+// 2. Compares with allocation bitmap and frees orphaned blocks
+// 3. Fixes the volume header's freeBlocks count
 // Returns the corrected free space in bytes, or 0 on failure.
 uint64_t hfsplus_repair_free_count(HFSPlusVolume* vol, std::string* log);
 

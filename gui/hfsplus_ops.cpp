@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <setjmp.h>
 
 #pragma GCC diagnostic push
@@ -694,6 +695,36 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
     return ok ? 0 : -1;
 }
 
+// Build a set of blocks that are actually referenced by files in the catalog
+static void collect_used_blocks(Volume* volume, uint32_t folder_cnid,
+                                 std::vector<bool>& used_map) {
+    CatalogRecordList* list = getFolderContents((HFSCatalogNodeID)folder_cnid, volume);
+    CatalogRecordList* cur = list;
+    while (cur) {
+        if (cur->record) {
+            if (cur->record->recordType == kHFSPlusFileRecord) {
+                HFSPlusCatalogFile* file = (HFSPlusCatalogFile*)cur->record;
+                // Mark blocks used by data fork and resource fork extents
+                HFSPlusForkData* forks[2] = { &file->dataFork, &file->resourceFork };
+                for (int f = 0; f < 2; f++) {
+                    for (int e = 0; e < 8; e++) {
+                        uint32_t start = forks[f]->extents[e].startBlock;
+                        uint32_t count = forks[f]->extents[e].blockCount;
+                        if (count == 0) break;
+                        for (uint32_t b = start; b < start + count && b < used_map.size(); b++)
+                            used_map[b] = true;
+                    }
+                }
+            } else if (cur->record->recordType == kHFSPlusFolderRecord) {
+                HFSPlusCatalogFolder* folder = (HFSPlusCatalogFolder*)cur->record;
+                collect_used_blocks(volume, folder->folderID, used_map);
+            }
+        }
+        cur = cur->next;
+    }
+    releaseCatalogRecordList(list);
+}
+
 uint64_t hfsplus_repair_free_count(HFSPlusVolume* vol, std::string* log) {
     if (!vol || !vol->volume) return 0;
 
@@ -701,36 +732,95 @@ uint64_t hfsplus_repair_free_count(HFSPlusVolume* vol, std::string* log) {
     uint32_t headerFree = vol->volume->volumeHeader->freeBlocks;
     uint64_t blockSize = vol->volume->volumeHeader->blockSize;
 
-    // Scan allocation bitmap to count actually free blocks
-    uint32_t actualFree = 0;
+    if (log) {
+        *log += "  Total blocks: " + std::to_string(totalBlocks)
+              + ", block size: " + std::to_string(blockSize) + "\n";
+        *log += "  Header free blocks: " + std::to_string(headerFree)
+              + " (" + std::to_string(headerFree * blockSize / (1024*1024)) + " MB)\n";
+    }
+
+    // Build a map of blocks actually referenced by catalog files
+    if (log) *log += "  Scanning catalog for referenced blocks...\n";
+
+    std::vector<bool> referenced(totalBlocks, false);
+
+    // Mark special file blocks (extents overflow, catalog, allocation, attributes, startup)
+    HFSPlusVolumeHeader* vh = vol->volume->volumeHeader;
+    HFSPlusForkData* special_forks[] = {
+        &vh->extentsFile, &vh->catalogFile, &vh->allocationFile,
+        &vh->attributesFile, &vh->startupFile
+    };
+    for (int sf = 0; sf < 5; sf++) {
+        for (int e = 0; e < 8; e++) {
+            uint32_t start = special_forks[sf]->extents[e].startBlock;
+            uint32_t count = special_forks[sf]->extents[e].blockCount;
+            if (count == 0) break;
+            for (uint32_t b = start; b < start + count && b < totalBlocks; b++)
+                referenced[b] = true;
+        }
+    }
+
+    // Mark the last block (alternate volume header) and first blocks
+    if (totalBlocks > 0) referenced[totalBlocks - 1] = true;  // alternate VH
+    // Block 0-2 are typically reserved (boot blocks + VH)
+    for (uint32_t b = 0; b < 3 && b < totalBlocks; b++)
+        referenced[b] = true;
+
+    // Walk the catalog tree to find all file extents
+    PANIC_PROTECT_BEGIN()
+        if (log) *log += "  ERROR: panic during catalog scan\n";
+        return 0;
+    PANIC_PROTECT_END()
+
+    collect_used_blocks(vol->volume, kHFSRootFolderID, referenced);
+    s_panic_armed = false;
+
+    // Compare referenced blocks with allocation bitmap — find orphans
+    uint32_t orphaned = 0;
+    uint32_t bitmap_used = 0;
+    uint32_t referenced_count = 0;
+
     for (uint32_t b = 0; b < totalBlocks; b++) {
-        if (!isBlockUsed(vol->volume, b))
-            actualFree++;
+        bool in_bitmap = isBlockUsed(vol->volume, b);
+        if (in_bitmap) bitmap_used++;
+        if (referenced[b]) referenced_count++;
+
+        // Block is in bitmap (allocated) but NOT referenced by any file = orphan
+        if (in_bitmap && !referenced[b]) {
+            orphaned++;
+            // Free the orphaned block
+            setBlockUsed(vol->volume, b, 0);
+        }
     }
 
     if (log) {
-        *log += "  Header says: " + std::to_string(headerFree) + " free blocks ("
-              + std::to_string(headerFree * blockSize / (1024*1024)) + " MB)\n";
-        *log += "  Bitmap says: " + std::to_string(actualFree) + " free blocks ("
-              + std::to_string(actualFree * blockSize / (1024*1024)) + " MB)\n";
+        *log += "  Bitmap allocated: " + std::to_string(bitmap_used) + " blocks\n";
+        *log += "  Catalog referenced: " + std::to_string(referenced_count) + " blocks\n";
+        *log += "  Orphaned blocks: " + std::to_string(orphaned)
+              + " (" + std::to_string(orphaned * blockSize / (1024*1024)) + " MB)\n";
     }
 
-    if (headerFree != actualFree) {
-        if (log) *log += "  WARNING: free block count mismatch! Repairing...\n";
-        vol->volume->volumeHeader->freeBlocks = actualFree;
+    // Update free block count
+    uint32_t newFree = totalBlocks - referenced_count;
+    if (orphaned > 0 || headerFree != newFree) {
+        vol->volume->volumeHeader->freeBlocks = newFree;
 
         PANIC_PROTECT_BEGIN()
-            if (log) *log += "  ERROR: failed to update volume header\n";
-            return (uint64_t)actualFree * blockSize;
+            if (log) *log += "  ERROR: failed to update volume\n";
+            return (uint64_t)newFree * blockSize;
         PANIC_PROTECT_END()
 
         updateVolume(vol->volume);
         s_panic_armed = false;
 
-        if (log) *log += "  Fixed: freeBlocks updated to " + std::to_string(actualFree) + "\n";
+        if (log) {
+            *log += "  Repaired: freed " + std::to_string(orphaned) + " orphaned blocks\n";
+            *log += "  New free: " + std::to_string(newFree) + " blocks ("
+                  + std::to_string(newFree * blockSize / (1024*1024)) + " MB)\n";
+        }
     }
 
-    return (uint64_t)actualFree * blockSize;
+    return (uint64_t)newFree * blockSize;
 }
 
 int hfsplus_force_delete(HFSPlusVolume* vol, const char* path) {
