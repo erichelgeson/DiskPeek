@@ -11,16 +11,42 @@ env:
   DISKPEEK_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
 
 jobs:
-  build-appimage:
-    name: Linux AppImage
+  build-linux:
+    name: Linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Build AppImage
-        run: packaging/build-appimage.sh
+      - name: Build
+        run: nix develop -c bash -c "meson setup builddir && ninja -C builddir"
+
+      - name: Create AppImage
+        run: |
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O /tmp/linuxdeploy
+          chmod +x /tmp/linuxdeploy
+
+          APPDIR=$PWD/AppDir
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/icons/hicolor/256x256/apps" "$APPDIR/usr/share/applications" "$APPDIR/usr/bin/lib/fonts"
+
+          cp builddir/hfsbrowser "$APPDIR/usr/bin/"
+          cp lib/fonts/ChicagoFLF.ttf "$APPDIR/usr/bin/lib/fonts/"
+          cp packaging/diskpeek.desktop "$APPDIR/usr/share/applications/"
+          cp DogCow_from_LaserWriter_8.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/diskpeek.png"
+
+          nix develop -c bash -c "/tmp/linuxdeploy --appimage-extract-and-run \
+            --appdir '$APPDIR' \
+            --desktop-file '$APPDIR/usr/share/applications/diskpeek.desktop' \
+            --icon-file '$APPDIR/usr/share/icons/hicolor/256x256/apps/diskpeek.png' \
+            --exclude-library 'libGL.so*' \
+            --exclude-library 'libGLX.so*' \
+            --exclude-library 'libGLdispatch.so*' \
+            --exclude-library 'libEGL.so*' \
+            --output appimage"
+
+          mkdir -p dist
+          mv *.AppImage dist/diskpeek-x86_64.AppImage
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
@@ -33,16 +59,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
-        run: brew install meson ninja sdl3
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build
-        run: |
-          meson setup builddir
-          ninja -C builddir
+        run: nix develop -c bash -c "meson setup builddir && ninja -C builddir"
 
       - name: Determine architecture
         id: arch
@@ -70,8 +91,6 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -82,7 +101,7 @@ jobs:
             mingw-w64-ucrt-x86_64-meson
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-pkg-config
-            mingw-w64-ucrt-x86_64-SDL3
+            mingw-w64-ucrt-x86_64-sdl3
             mingw-w64-ucrt-x86_64-zlib
 
       - name: Build
@@ -111,7 +130,7 @@ jobs:
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-appimage, build-macos, build-windows]
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
