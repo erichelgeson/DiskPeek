@@ -197,6 +197,9 @@ private:
     int sort_column_ = 1;  // default sort by name
     bool sort_ascending_ = true;
     char search_buf_[256] = {};
+    std::vector<HFSEntry> search_results_;
+    bool search_active_ = false;
+    void do_search();
 
     // Popups
     bool show_error_ = false;

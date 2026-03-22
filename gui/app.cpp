@@ -582,6 +582,8 @@ void App::cleanup_icons() {
 // --- Navigation ---
 
 void App::navigate_to(const char* dirname) {
+    search_active_ = false;
+    search_results_.clear();
     std::string new_path = current_path_ + dirname + ":";
 
     if (vol_type_ == VolumeType::HFS) {
@@ -793,11 +795,17 @@ void App::render_path_bar() {
     float avail = ImGui::GetContentRegionAvail().x;
     ImGui::SameLine(avail - search_width - 20);
     ImGui::SetNextItemWidth(search_width);
-    ImGui::InputTextWithHint("##search", "Search...", search_buf_, sizeof(search_buf_));
+    if (ImGui::InputTextWithHint("##search", "Search volume...", search_buf_, sizeof(search_buf_),
+            ImGuiInputTextFlags_EnterReturnsTrue)) {
+        do_search();
+    }
     if (search_buf_[0]) {
         ImGui::SameLine();
-        if (ImGui::SmallButton("X##clr"))
+        if (ImGui::SmallButton("X##clr")) {
             memset(search_buf_, 0, sizeof(search_buf_));
+            search_active_ = false;
+            search_results_.clear();
+        }
     }
 }
 
@@ -842,21 +850,13 @@ void App::render_file_list() {
     }
 
 
-    // Build filtered index list for search
+    // Use search results or current directory entries
+    std::vector<HFSEntry>& display_entries = search_active_ ? search_results_ : entries_;
+
     std::vector<int> visible;
-    visible.reserve(entries_.size());
-    for (int i = 0; i < (int)entries_.size(); i++) {
-        if (search_buf_[0]) {
-            // Case-insensitive substring match
-            std::string lower_name = entries_[i].name;
-            std::string lower_search = search_buf_;
-            for (auto& ch : lower_name) ch = tolower((unsigned char)ch);
-            for (auto& ch : lower_search) ch = tolower((unsigned char)ch);
-            if (lower_name.find(lower_search) == std::string::npos)
-                continue;
-        }
+    visible.reserve(display_entries.size());
+    for (int i = 0; i < (int)display_entries.size(); i++)
         visible.push_back(i);
-    }
 
     if (ImGui::BeginTable("files", 5,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
@@ -880,7 +880,7 @@ void App::render_file_list() {
                 sort_column_ = spec.ColumnIndex;
                 sort_ascending_ = (spec.SortDirection == ImGuiSortDirection_Ascending);
 
-                std::sort(entries_.begin(), entries_.end(),
+                std::sort(display_entries.begin(), display_entries.end(),
                     [this](const HFSEntry& a, const HFSEntry& b) {
                         // Directories always first
                         if (a.is_dir != b.is_dir)
@@ -910,17 +910,8 @@ void App::render_file_list() {
 
                 // Rebuild visible indices after sort
                 visible.clear();
-                for (int i = 0; i < (int)entries_.size(); i++) {
-                    if (search_buf_[0]) {
-                        std::string lower_name = entries_[i].name;
-                        std::string lower_search = search_buf_;
-                        for (auto& ch : lower_name) ch = tolower((unsigned char)ch);
-                        for (auto& ch : lower_search) ch = tolower((unsigned char)ch);
-                        if (lower_name.find(lower_search) == std::string::npos)
-                            continue;
-                    }
+                for (int i = 0; i < (int)display_entries.size(); i++)
                     visible.push_back(i);
-                }
 
                 sort_specs->SpecsDirty = false;
             }
@@ -928,7 +919,7 @@ void App::render_file_list() {
 
         for (int vi = 0; vi < (int)visible.size(); vi++) {
             int i = visible[vi];
-            const HFSEntry& e = entries_[i];
+            const HFSEntry& e = display_entries[i];
 
             // Check if file is invisible (Finder flag kIsInvisible = 0x4000)
             bool is_hidden = (e.fdflags & 0x4000) != 0;
@@ -1097,12 +1088,12 @@ void App::render_file_list() {
                             if (found) {
                                 vol_->set_type_creator(ctx_hfs_path, tcr.type, tcr.creator);
                                 // Update the displayed entry
-                                entries_[i].type[0] = tcr.type[0]; entries_[i].type[1] = tcr.type[1];
-                                entries_[i].type[2] = tcr.type[2]; entries_[i].type[3] = tcr.type[3];
-                                entries_[i].type[4] = '\0';
-                                entries_[i].creator[0] = tcr.creator[0]; entries_[i].creator[1] = tcr.creator[1];
-                                entries_[i].creator[2] = tcr.creator[2]; entries_[i].creator[3] = tcr.creator[3];
-                                entries_[i].creator[4] = '\0';
+                                display_entries[i].type[0] = tcr.type[0]; display_entries[i].type[1] = tcr.type[1];
+                                display_entries[i].type[2] = tcr.type[2]; display_entries[i].type[3] = tcr.type[3];
+                                display_entries[i].type[4] = '\0';
+                                display_entries[i].creator[0] = tcr.creator[0]; display_entries[i].creator[1] = tcr.creator[1];
+                                display_entries[i].creator[2] = tcr.creator[2]; display_entries[i].creator[3] = tcr.creator[3];
+                                display_entries[i].creator[4] = '\0';
                                 status_text_ = "Fixed: " + e.name + " → " + tcr.type + "/" + tcr.creator;
                             } else {
                                 status_text_ = "Could not detect type/creator for " + e.name;
@@ -2573,6 +2564,54 @@ std::string App::macroman_to_utf8(const std::string& s) { return hfsbrowse::macr
 std::string App::utf8_to_macroman(const std::string& s) { return hfsbrowse::utf8_to_macroman(s); }
 std::string App::sanitize_hfs_name(const std::string& s) { return hfsbrowse::sanitize_hfs_name(s); }
 std::string App::sanitize_hfsplus_name(const std::string& s) { return hfsbrowse::sanitize_hfsplus_name(s); }
+
+void App::do_search() {
+    search_results_.clear();
+    if (!vol_ || !search_buf_[0]) { search_active_ = false; return; }
+
+    std::string query = search_buf_;
+    for (auto& ch : query) ch = tolower((unsigned char)ch);
+
+    search_active_ = true;
+
+    // Recursive search across the entire volume
+    std::function<void(uint32_t, const std::string&, const std::string&)> walk;
+    walk = [&](uint32_t cnid, const std::string& mac_path, const std::string& display_path) {
+        std::vector<HBEntry> hb_entries;
+        if (vol_type_ == VolumeType::HFSPLUS && cnid != 0)
+            hb_entries = vol_->list_dir(cnid);
+        else
+            hb_entries = vol_->list_dir_by_path(mac_path);
+
+        for (auto& hb : hb_entries) {
+            std::string lower_name = hb.name;
+            for (auto& ch : lower_name) ch = tolower((unsigned char)ch);
+
+            if (lower_name.find(query) != std::string::npos) {
+                HFSEntry e;
+                e.name = display_path + hb.name;
+                e.is_dir = hb.is_dir;
+                e.cnid = hb.cnid;
+                e.parent_cnid = hb.parent_cnid;
+                e.fdflags = hb.fdflags;
+                e.size = (unsigned long)hb.data_size;
+                e.rsize = (unsigned long)hb.rsrc_size;
+                e.crdate = hb.crdate;
+                e.mddate = hb.mddate;
+                memcpy(e.type, hb.type, 5);
+                memcpy(e.creator, hb.creator, 5);
+                search_results_.push_back(std::move(e));
+            }
+
+            if (hb.is_dir) {
+                walk(hb.cnid, mac_path + hb.name + ":", display_path + hb.name + "/");
+            }
+        }
+    };
+
+    walk(2, volume_name_ + ":", "");
+    status_text_ = "Found " + std::to_string(search_results_.size()) + " results for \"" + search_buf_ + "\"";
+}
 
 std::string App::format_size(unsigned long bytes) {
     char buf[32];
