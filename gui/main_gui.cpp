@@ -11,12 +11,15 @@
 #include "imgui_impl_opengl3.h"
 
 #include "app.h"
+#include "fonts.h"
 
 #include <cstring>
 #include <cstdio>
 
+ImFont* g_mono_font = nullptr;
+
 int main(int, char**) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         fprintf(stderr, "Error: SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -174,6 +177,13 @@ int main(int, char**) {
     ImFont* font = io.Fonts->AddFontFromFileTTF("lib/fonts/ChicagoFLF.ttf", 14.0f * scale, nullptr, mac_glyph_ranges);
     if (!font)
         io.Fonts->AddFontDefault();
+
+    // Load built-in monospace font for hex dumps etc.
+    ImFontConfig mono_cfg;
+    mono_cfg.SizePixels = 13.0f * scale;
+    snprintf(mono_cfg.Name, sizeof(mono_cfg.Name), "ProggyClean (mono)");
+    g_mono_font = io.Fonts->AddFontDefault(&mono_cfg);
+
     io.FontGlobalScale = 1.0f;
 
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);

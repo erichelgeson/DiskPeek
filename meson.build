@@ -4,11 +4,12 @@ project('hfsbrowser', 'c', 'cpp',
     'warning_level=2',
     'buildtype=debugoptimized',
     'c_std=c11',
-    'cpp_std=c++17',
+    'cpp_std=c++23',
   ]
 )
 
 cc = meson.get_compiler('c')
+cxx = meson.get_compiler('cpp')
 
 # libhfs sources — select OS abstraction layer per platform
 if host_machine.system() == 'windows'
@@ -103,6 +104,82 @@ libdmg_hfsplus = static_library('dmg-hfsplus',
   c_args : libdmg_hfsplus_c_args,
 )
 
+# phosg — utility library (vendored from github.com/fuzziqersoftware/phosg)
+phosg_inc = include_directories('lib')  # so <phosg/X.hh> resolves to lib/phosg/X.hh
+phosg_self_inc = include_directories('lib/phosg')  # so phosg files can include each other
+
+phosg_src = files(
+  'lib/phosg/Strings.cc',
+  'lib/phosg/Encoding.cc',
+  'lib/phosg/Filesystem.cc',
+  'lib/phosg/Filesystem-Unix.cc',
+  'lib/phosg/Hash.cc',
+  'lib/phosg/Time.cc',
+)
+
+phosg_cpp_args = []
+if cxx.get_id() != 'msvc'
+  phosg_cpp_args += [
+    '-Wno-unused-parameter',
+    '-Wno-sign-compare',
+  ]
+endif
+
+phosg_lib = static_library('phosg',
+  phosg_src,
+  include_directories : [phosg_self_inc],
+  dependencies : zlib_dep,
+  cpp_args : phosg_cpp_args,
+)
+
+# libresource_file — Mac resource fork parser/decoder
+# (vendored from github.com/fuzziqersoftware/resource_dasm)
+resource_dasm_inc = include_directories('lib/resource_dasm')
+
+resource_dasm_src = files(
+  'lib/resource_dasm/ResourceFile.cc',
+  'lib/resource_dasm/ResourceCompression.cc',
+  'lib/resource_dasm/QuickDrawEngine.cc',
+  'lib/resource_dasm/QuickDrawFormats.cc',
+  'lib/resource_dasm/AudioCodecs.cc',
+  'lib/resource_dasm/BitmapFontRenderer.cc',
+  'lib/resource_dasm/Lookups.cc',
+  'lib/resource_dasm/TextCodecs.cc',
+  'lib/resource_dasm/ResourceIDs.cc',
+  'lib/resource_dasm/SystemDecompressors.cc',
+  'lib/resource_dasm/LowMemoryGlobals.cc',
+  'lib/resource_dasm/IndexFormats/ResourceFork.cc',
+  'lib/resource_dasm/ResourceDecompressors/System01.cc',
+  'lib/resource_dasm/ResourceDecompressors/System2.cc',
+  'lib/resource_dasm/ResourceDecompressors/System3.cc',
+  'lib/resource_dasm/DataCodecs/PackBits.cc',
+  'lib/resource_dasm/DataCodecs/Bungie.cc',
+  'lib/resource_dasm/DataCodecs/DinoParkTycoon-LZSS-RLE.cc',
+  'lib/resource_dasm/DataCodecs/MacSki-RUN4-COOK-CO2K.cc',
+  'lib/resource_dasm/DataCodecs/Presage-LZSS.cc',
+  'lib/resource_dasm/DataCodecs/SoundMusicSys-LZSS.cc',
+  'lib/resource_dasm/Audio/Constants.cc',
+  'lib/resource_dasm/Audio/Instrument.cc',
+  'lib/resource_dasm/Audio/WAVFile.cc',
+)
+
+resource_dasm_cpp_args = []
+if cxx.get_id() != 'msvc'
+  resource_dasm_cpp_args += [
+    '-Wno-unused-parameter',
+    '-Wno-sign-compare',
+    '-Wno-address-of-packed-member',
+  ]
+endif
+
+resource_file_lib = static_library('resource_file',
+  resource_dasm_src,
+  include_directories : [resource_dasm_inc, phosg_inc],
+  dependencies : zlib_dep,
+  link_with : [phosg_lib],
+  cpp_args : resource_dasm_cpp_args,
+)
+
 # GUI application
 sdl3_dep = dependency('sdl3')
 gl_dep = dependency('gl')
@@ -167,13 +244,14 @@ gui_sources = files(
   'gui/main_gui.cpp',
   'gui/app.cpp',
   'gui/hfsplus_ops.cpp',
+  'gui/resedit.cpp',
 )
 
 executable('hfsbrowser',
   gui_sources + imgui_sources,
-  include_directories : [libhfs_inc, libdmg_hfsplus_inc, hfsbrowse_inc, imgui_inc, include_directories('gui'), include_directories('.')],
+  include_directories : [libhfs_inc, libdmg_hfsplus_inc, hfsbrowse_inc, imgui_inc, resource_dasm_inc, phosg_inc, include_directories('gui'), include_directories('.')],
   dependencies : [sdl3_dep, gl_dep, thread_dep, zlib_dep],
-  link_with : [libhfs, libdmg_hfsplus, binhex_lib, hfsbrowse_lib],
+  link_with : [libhfs, libdmg_hfsplus, binhex_lib, hfsbrowse_lib, resource_file_lib, phosg_lib],
   link_args : gui_link_args,
   install : true,
 )

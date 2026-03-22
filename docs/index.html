@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Peek - Classic Mac Disk Image Browser</title>
+<style>
+  :root {
+    --bg: #f5f0e8;
+    --card: #ffffff;
+    --border: #999;
+    --text: #222;
+    --muted: #666;
+    --accent: #1a5276;
+    --title-bar: linear-gradient(180deg, #fff 0%, #ddd 100%);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Geneva", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container { max-width: 800px; margin: 0 auto; padding: 1rem; }
+
+  /* Mac-style window */
+  .window {
+    background: var(--card);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    margin: 2rem auto;
+    box-shadow: 2px 4px 12px rgba(0,0,0,0.15);
+    overflow: hidden;
+  }
+  .title-bar {
+    background: var(--title-bar);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .title-bar .dots {
+    display: flex;
+    gap: 5px;
+  }
+  .title-bar .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.2);
+  }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #ffbd2e; }
+  .dot-green { background: #28c840; }
+  .title-bar .title {
+    flex: 1;
+    text-align: center;
+    font-weight: bold;
+    font-size: 13px;
+  }
+  .window-body { padding: 1.5rem 2rem; }
+
+  /* Hero */
+  .hero {
+    text-align: center;
+    padding: 2rem 0 1rem;
+  }
+  .hero h1 {
+    font-size: 2.2rem;
+    margin-bottom: 0.3rem;
+  }
+  .hero .tagline {
+    color: var(--muted);
+    font-size: 1.1rem;
+    margin-bottom: 1.5rem;
+  }
+  .hero img {
+    image-rendering: pixelated;
+    width: 128px;
+    height: 128px;
+    margin-bottom: 1rem;
+  }
+
+  /* Download buttons */
+  .downloads {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    justify-content: center;
+    margin: 1.5rem 0;
+  }
+  .btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    border: 1px solid rgba(0,0,0,0.2);
+    transition: background 0.2s;
+  }
+  .btn:hover { background: #0d3d5c; }
+  .btn small { display: block; font-size: 0.75rem; opacity: 0.8; }
+
+  /* Features */
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .feature {
+    padding: 0.8rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fafafa;
+  }
+  .feature h3 { font-size: 0.95rem; margin-bottom: 0.3rem; }
+  .feature p { font-size: 0.85rem; color: var(--muted); }
+
+  /* Screenshot */
+  .screenshot {
+    text-align: center;
+    margin: 1.5rem 0;
+  }
+  .screenshot img {
+    max-width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 1px 2px 8px rgba(0,0,0,0.1);
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 1.5rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .footer a { color: var(--accent); }
+
+  code {
+    background: #eee;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+
+  @media (max-width: 600px) {
+    .features { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 1.6rem; }
+    .downloads { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="hero">
+    <img src="dogcow.png" alt="DogCow - Clarus">
+    <h1>Disk Peek</h1>
+    <p class="tagline">Build and inspect HFS disk images for <a href="https://bluescsi.com" style="color:var(--accent)">BlueSCSI</a> and classic Macintosh hardware</p>
+  </div>
+
+  <div class="window">
+    <div class="title-bar">
+      <div class="dots">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+      </div>
+      <span class="title">Download</span>
+      <div class="dots" style="visibility:hidden">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+    </div>
+    <div class="window-body">
+      <div class="downloads">
+        <a class="btn" href="https://github.com/erichelgeson/diskpeek/releases/latest">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle;margin-right:4px"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587.26 1.22.437 1.885.507.246.026.494.039.738.039s.492-.013.739-.04a7.1 7.1 0 001.904-.517c.242.49.69.842 1.218.958.75.2 1.69-.004 2.616-.47.863-.465 1.965-.4 2.774-.6.405-.13.766-.267.94-.6.174-.34.142-.805-.106-1.485-.076-.242-.018-.571.04-.97.027-.135.055-.337.055-.536a1.12 1.12 0 00-.131-.601c-.206-.412-.551-.545-.864-.68-.312-.134-.598-.202-.797-.4a4.83 4.83 0 01-.663-.84.424.424 0 00-.109-.134c.124-.805-.009-1.657-.287-2.489-.589-1.77-1.831-3.47-2.716-4.521-.75-1.067-.974-1.928-1.05-3.02-.065-1.491 1.056-5.965-3.17-6.298A5.095 5.095 0 0012.504 0z"/></svg>
+          Linux AppImage
+          <small>x86_64</small>
+        </a>
+        <a class="btn" href="https://github.com/erichelgeson/diskpeek/releases/latest">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle;margin-right:4px"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
+          macOS
+          <small>Apple Silicon &amp; Intel</small>
+        </a>
+        <a class="btn" href="https://github.com/erichelgeson/diskpeek/releases/latest">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:middle;margin-right:4px"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.849"/></svg>
+          Windows
+          <small>x86_64</small>
+        </a>
+      </div>
+      <p style="text-align:center;font-size:0.85rem;color:var(--muted);margin-top:0.8rem">
+        Or build from source: <code>meson setup builddir && ninja -C builddir</code>
+      </p>
+      <p style="text-align:center;margin-top:1rem;font-size:0.9rem">
+        Works great with <a href="https://bluescsi.com" style="color:var(--accent);font-weight:bold">BlueSCSI</a> &#x2014;
+        prepare and inspect disk images for your classic Mac
+      </p>
+    </div>
+  </div>
+
+  <div class="screenshot">
+    <img src="screenshot.png" alt="Disk Peek browsing a classic Mac disk image">
+  </div>
+
+  <div class="window">
+    <div class="title-bar">
+      <div class="dots">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+      </div>
+      <span class="title">Features</span>
+      <div class="dots" style="visibility:hidden">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+    </div>
+    <div class="window-body">
+      <div class="features">
+        <div class="feature">
+          <h3>HFS &amp; HFS+ Support</h3>
+          <p>Open and browse both classic HFS and modern HFS+ disk images with full metadata display.</p>
+        </div>
+        <div class="feature">
+          <h3>Resource Browser</h3>
+          <p>ResEdit-style resource viewer. Preview icons, images, sounds, text, dialogs, menus, and more.</p>
+        </div>
+        <div class="feature">
+          <h3>Cross-Platform</h3>
+          <p>Runs on Linux, macOS, and Windows. No emulator or classic Mac hardware needed.</p>
+        </div>
+        <div class="feature">
+          <h3>Batch Export</h3>
+          <p>Dump all resources to decoded files: PNG for images, WAV for sounds, TXT for strings.</p>
+        </div>
+        <div class="feature">
+          <h3>File Management</h3>
+          <p>Import, export, rename, delete files. Create folders. Set type/creator codes with auto-detection.</p>
+        </div>
+        <div class="feature">
+          <h3>BinHex &amp; AppleDouble</h3>
+          <p>Export with full resource fork preservation via BinHex 4.0 or data fork + AppleDouble.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="window">
+    <div class="title-bar">
+      <div class="dots">
+        <span class="dot dot-red"></span>
+        <span class="dot dot-yellow"></span>
+        <span class="dot dot-green"></span>
+      </div>
+      <span class="title">Credits</span>
+      <div class="dots" style="visibility:hidden">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+    </div>
+    <div class="window-body">
+      <p>Built on <strong>hfsutils</strong> by Robert Leslie, <strong>libdmg-hfsplus</strong> by planetbeing,
+         <strong>resource_dasm</strong> &amp; <strong>phosg</strong> by Martin Michelsen,
+         <strong>Dear ImGui</strong> by Omar Cornut, and <strong>SDL3</strong>.</p>
+      <p style="margin-top:0.5rem;font-size:0.85rem;color:var(--muted)">
+        Licensed under GPLv3. Resource decoder libraries under MIT license.
+      </p>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/erichelgeson/diskpeek">View on GitHub</a>
+  </div>
+</div>
+
+</body>
+</html>

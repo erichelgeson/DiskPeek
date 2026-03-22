@@ -4,6 +4,7 @@
 
 #include "app.h"
 #include "imgui.h"
+#include "apm_template.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
@@ -432,6 +433,7 @@ void App::open_image(const char* path) {
 }
 
 void App::close_image() {
+    resedit_windows_.clear();
     cleanup_icons();
     vol_.reset();
     vol_type_ = VolumeType::NONE;
@@ -671,6 +673,9 @@ void App::render() {
     process_dialog_result();
 
     ImGui::End();
+
+    // Render ResEdit windows (outside the main window)
+    render_resedit_windows();
 }
 
 void App::render_toolbar() {
@@ -987,8 +992,14 @@ void App::render_file_list() {
             if (ImGui::Selectable(sel_id, selected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 selected_entry_ = i;
-                if (ImGui::IsMouseDoubleClicked(0) && e.is_dir) {
-                    navigate_to(e.name.c_str());
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    if (e.is_dir) {
+                        navigate_to(e.name.c_str());
+                    } else if (e.rsize > 0) {
+                        // Open resource browser for files with resource forks
+                        std::string hfs_path = current_path_ + e.name;
+                        open_resources(e, hfs_path);
+                    }
                 }
             }
 
@@ -1002,6 +1013,31 @@ void App::render_file_list() {
                 std::string ctx_hfs_path = current_path_ + e.name;
 
                 if (!e.is_dir) {
+                    // Resource browser
+                    if (e.rsize > 0) {
+                        if (ImGui::MenuItem("Open Resources")) {
+                            open_resources(e, ctx_hfs_path);
+                        }
+                        if (ImGui::MenuItem("Dump Resources...")) {
+                            // Store entry info for the async folder dialog
+                            dump_rsrc_entry_ = e;
+                            dump_rsrc_hfs_path_ = ctx_hfs_path;
+                            SDL_ShowOpenFolderDialog(
+                                [](void* userdata, const char* const* filelist, int) {
+                                    auto* self = static_cast<App*>(userdata);
+                                    if (filelist && filelist[0]) {
+                                        std::vector<uint8_t> rsrc = self->read_rsrc_fork(self->dump_rsrc_hfs_path_);
+                                        if (!rsrc.empty()) {
+                                            ResEditWindow::dump_all_resources(rsrc, filelist[0]);
+                                            self->status_text_ = "Resources dumped to folder";
+                                        }
+                                    }
+                                },
+                                this, nullptr, nullptr, false);
+                        }
+                        ImGui::Separator();
+                    }
+
                     // Default export: BinHex if has rsrc fork, regular otherwise
                     if (e.rsize > 0) {
                         if (ImGui::MenuItem("Export as BinHex (.hqx)")) {
@@ -1226,6 +1262,14 @@ void App::render_file_list() {
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
             navigate_up();
+        }
+        if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_I) && has_sel) {
+            const HFSEntry& e = entries_[selected_entry_];
+            info_entry_idx_ = selected_entry_;
+            info_fdflags_ = e.fdflags;
+            memcpy(info_type_, e.type, 5);
+            memcpy(info_creator_, e.creator, 5);
+            show_info_ = true;
         }
         if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && (ImGui::IsKeyPressed(ImGuiKey_X) || ImGui::IsKeyPressed(ImGuiKey_C)) && has_sel) {
             const HFSEntry& e = entries_[selected_entry_];
@@ -1617,8 +1661,46 @@ void App::render_info_popup() {
         // Label color (bits 1-3)
         int label = (info_fdflags_ >> 1) & 0x07;
         const char* label_names[] = { "None", "Project 2", "Project 1", "Personal", "Cool", "In Progress", "Hot", "Essential" };
-        if (ImGui::Combo("Label", &label, label_names, 8)) {
-            info_fdflags_ = (info_fdflags_ & ~0x000E) | ((label & 0x07) << 1);
+        // Opaque versions of the label colors for swatches
+        static const ImVec4 label_swatch_colors[] = {
+            ImVec4(0, 0, 0, 0),                 // 0: None
+            ImVec4(0.55f, 0.43f, 0.16f, 1.0f),  // 1: Project 2 (brown)
+            ImVec4(0.24f, 0.63f, 0.24f, 1.0f),  // 2: Project 1 (green)
+            ImVec4(0.16f, 0.24f, 0.75f, 1.0f),  // 3: Personal (dark blue)
+            ImVec4(0.20f, 0.75f, 0.86f, 1.0f),  // 4: Cool (cyan)
+            ImVec4(0.82f, 0.20f, 0.75f, 1.0f),  // 5: In Progress (magenta)
+            ImVec4(0.86f, 0.12f, 0.12f, 1.0f),  // 6: Hot (red)
+            ImVec4(1.00f, 0.63f, 0.20f, 1.0f),  // 7: Essential (orange)
+        };
+
+        ImGui::Text("Label:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200);
+        // Draw current swatch before combo
+        if (label > 0) {
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + 12, pos.y + ImGui::GetTextLineHeight()),
+                ImGui::ColorConvertFloat4ToU32(label_swatch_colors[label]), 2.0f);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16);
+        }
+        if (ImGui::BeginCombo("##label", label_names[label])) {
+            for (int i = 0; i < 8; i++) {
+                bool selected = (label == i);
+                // Draw color swatch next to each item
+                if (i > 0) {
+                    ImVec2 pos = ImGui::GetCursorScreenPos();
+                    ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + 12, pos.y + ImGui::GetTextLineHeight()),
+                        ImGui::ColorConvertFloat4ToU32(label_swatch_colors[i]), 2.0f);
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16);
+                }
+                if (ImGui::Selectable(label_names[i], selected)) {
+                    label = i;
+                    info_fdflags_ = (info_fdflags_ & ~0x000E) | ((label & 0x07) << 1);
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
         }
 
         ImGui::Text("Raw flags: 0x%04X", (unsigned)info_fdflags_ & 0xFFFF);
@@ -1689,39 +1771,66 @@ void App::render_about_popup() {
         ImGui::Text("Built with:");
         ImGui::Spacing();
 
-        ImGui::Text("hfsutils");
-        ImGui::TextDisabled("  Robert Leslie, 1996-1998");
-        ImGui::TextDisabled("  HFS filesystem library (GPLv2)");
-        ImGui::Spacing();
+        if (ImGui::BeginTable("about_libs", 2, ImGuiTableFlags_None)) {
+            ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthFixed, 280.0f);
+            ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthFixed, 280.0f);
 
-        ImGui::Text("libdmg-hfsplus");
-        ImGui::TextDisabled("  planetbeing (David Wang)");
-        ImGui::TextDisabled("  HFS+ filesystem library (GPLv3)");
-        ImGui::Spacing();
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("hfsutils");
+            ImGui::TextDisabled("  Robert Leslie, 1996-1998");
+            ImGui::TextDisabled("  HFS filesystem library (GPLv2+)");
+            ImGui::Spacing();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("Dear ImGui");
+            ImGui::TextDisabled("  Omar Cornut");
+            ImGui::TextDisabled("  Immediate mode GUI (MIT)");
+            ImGui::Spacing();
 
-        ImGui::Text("Dear ImGui");
-        ImGui::TextDisabled("  Omar Cornut");
-        ImGui::TextDisabled("  Immediate mode GUI (MIT)");
-        ImGui::Spacing();
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("libdmg-hfsplus");
+            ImGui::TextDisabled("  planetbeing (David Wang)");
+            ImGui::TextDisabled("  HFS+ filesystem library (GPLv3)");
+            ImGui::Spacing();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("SDL3");
+            ImGui::TextDisabled("  Sam Lantinga / libsdl.org");
+            ImGui::TextDisabled("  Cross-platform multimedia library (zlib)");
+            ImGui::Spacing();
 
-        ImGui::Text("SDL2");
-        ImGui::TextDisabled("  Sam Lantinga / libsdl.org");
-        ImGui::TextDisabled("  Cross-platform multimedia library (zlib)");
-        ImGui::Spacing();
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("resource_dasm");
+            ImGui::TextDisabled("  Martin Michelsen (fuzziqersoftware)");
+            ImGui::TextDisabled("  Mac resource fork parser and decoder (MIT)");
+            ImGui::Spacing();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("Fix-A-Fork");
+            ImGui::TextDisabled("  Eric Helgeson / BlueSCSI project");
+            ImGui::TextDisabled("  Type/creator detection (GPLv3)");
+            ImGui::Spacing();
 
-        ImGui::Text("Fix-A-Fork");
-        ImGui::TextDisabled("  Eric Helgeson / BlueSCSI project");
-        ImGui::TextDisabled("  Type/creator detection (portions re-licensed GPLv3)");
-        ImGui::Spacing();
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("phosg");
+            ImGui::TextDisabled("  Martin Michelsen (fuzziqersoftware)");
+            ImGui::TextDisabled("  Utility library for binary I/O and images (MIT)");
+            ImGui::Spacing();
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("zlib");
+            ImGui::TextDisabled("  Jean-loup Gailly, Mark Adler");
+            ImGui::TextDisabled("  Compression library (zlib)");
+            ImGui::Spacing();
 
-        ImGui::Text("zlib");
-        ImGui::TextDisabled("  Jean-loup Gailly, Mark Adler");
-        ImGui::TextDisabled("  Compression library (zlib)");
-        ImGui::Spacing();
+            ImGui::EndTable();
+        }
 
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::TextDisabled("https://github.com/erichelgeson/hfsutils");
+        if (ImGui::SmallButton("github.com/erichelgeson/DiskPeek")) {
+            SDL_OpenURL("https://github.com/erichelgeson/DiskPeek");
+        }
         ImGui::Spacing();
 
         if (ImGui::Button("OK", ImVec2(120, 0))) {
@@ -1895,14 +2004,40 @@ void App::process_dialog_result() {
         if (img_path.find('.') == std::string::npos)
             img_path += ".hda";
 
-        // Create the file with the right size
+        // Calculate sizes
+        uint64_t total_bytes = (uint64_t)new_image_size_mb_ * 1024UL * 1024UL;
+        uint32_t total_blocks = (uint32_t)(total_bytes / 512);
+        uint32_t hfs_blocks = total_blocks - APM_HFS_OFFSET_BLOCKS;
+        uint64_t hfs_bytes = (uint64_t)hfs_blocks * 512;
+
+        // Create the file
         FILE* f = fopen(img_path.c_str(), "wb");
         if (!f) {
             set_error("Failed to create file: " + img_path);
             break;
         }
-        // Write sparse file by seeking to end
-        if (fseek(f, (long)((uint64_t)new_image_size_mb_ * 1024UL * 1024UL - 1), SEEK_SET) != 0) {
+
+        // Write APM + SCSI driver template (DDM, partition map, Apple HD SC 7.3.5 driver)
+        // Then patch the size-dependent fields
+        uint8_t header[49152]; // 96 blocks
+        memcpy(header, apm_driver_template, sizeof(header));
+
+        // Patch DDM total block count (offset 0x004, big-endian uint32)
+        header[0x004] = (total_blocks >> 24) & 0xFF;
+        header[0x005] = (total_blocks >> 16) & 0xFF;
+        header[0x006] = (total_blocks >>  8) & 0xFF;
+        header[0x007] = (total_blocks      ) & 0xFF;
+
+        // Patch HFS partition block count in APM entry 3 (offset 0x60C, big-endian uint32)
+        header[0x60C] = (hfs_blocks >> 24) & 0xFF;
+        header[0x60D] = (hfs_blocks >> 16) & 0xFF;
+        header[0x60E] = (hfs_blocks >>  8) & 0xFF;
+        header[0x60F] = (hfs_blocks      ) & 0xFF;
+
+        fwrite(header, 1, sizeof(header), f);
+
+        // Extend file to full size (sparse)
+        if (fseek(f, (long)(total_bytes - 1), SEEK_SET) != 0) {
             fclose(f);
             remove(img_path.c_str());
             set_error("Failed to allocate file size");
@@ -1911,18 +2046,19 @@ void App::process_dialog_result() {
         fputc(0, f);
         fclose(f);
 
-        // Format as HFS
+        // Format the HFS partition (at offset 96 blocks)
         char vol_name[256];
         snprintf(vol_name, sizeof(vol_name), "%s", new_image_name_);
-        if (hfs_format(img_path.c_str(), 0, 0, vol_name, 0, nullptr) != 0) {
+        // pnum=1 tells libhfs to find the first Apple_HFS partition in the APM
+        if (hfs_format(img_path.c_str(), 1, 0, vol_name, 0, nullptr) != 0) {
             remove(img_path.c_str());
-            set_error("Failed to format HFS image");
+            set_error("Failed to format HFS partition");
             break;
         }
 
         // Open the newly created image
         open_image(img_path.c_str());
-        status_text_ = "Created new HFS image: " + img_path;
+        status_text_ = "Created new HFS device image: " + img_path;
         break;
     }
     default:
@@ -2629,4 +2765,40 @@ void App::set_error(const std::string& msg) {
     error_text_ = msg;
     show_error_ = true;
     status_text_ = "Error occurred";
+}
+
+// --- Resource browser (ResEdit) windows ---
+
+void App::open_resources(const HFSEntry& entry, const std::string& hfs_path) {
+    // Check if already open for this file
+    for (auto& w : resedit_windows_) {
+        if (w->filename == entry.name) {
+            w->open = true;
+            return;
+        }
+    }
+
+    // Read resource fork
+    std::vector<uint8_t> rsrc = read_rsrc_fork(hfs_path);
+    if (rsrc.empty()) {
+        set_error("No resource fork data for \"" + entry.name + "\"");
+        return;
+    }
+
+    auto win = std::make_unique<ResEditWindow>();
+    if (!win->open_rsrc(entry.name, rsrc)) {
+        set_error("Failed to parse resource fork of \"" + entry.name + "\"");
+        return;
+    }
+    resedit_windows_.push_back(std::move(win));
+}
+
+void App::render_resedit_windows() {
+    for (auto it = resedit_windows_.begin(); it != resedit_windows_.end();) {
+        if (!(*it)->render()) {
+            it = resedit_windows_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }

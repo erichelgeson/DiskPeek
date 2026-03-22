@@ -1,0 +1,182 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+
+env:
+  DISKPEEK_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+jobs:
+  build-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build AppImage
+        run: packaging/build-appimage.sh
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskpeek-linux-appimage
+          path: dist/diskpeek-x86_64.AppImage
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install meson ninja sdl3
+
+      - name: Build
+        run: |
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Determine architecture
+        id: arch
+        run: |
+          ARCH=$(uname -m)
+          [ "$ARCH" = "arm64" ] && ARCH="aarch64"
+          echo "arch=$ARCH" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp builddir/hfsbrowser "dist/diskpeek-macOS-${{ steps.arch.outputs.arch }}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskpeek-macos-${{ steps.arch.outputs.arch }}
+          path: dist/diskpeek-macOS-*
+
+  build-windows:
+    name: Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-SDL3
+            mingw-w64-ucrt-x86_64-zlib
+
+      - name: Build
+        run: |
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp builddir/hfsbrowser.exe dist/diskpeek-windows-x86_64.exe
+          # Bundle required DLLs
+          ldd builddir/hfsbrowser.exe | grep ucrt64 | awk '{print $3}' | while read dll; do
+            cp "$dll" dist/
+          done
+          # Also grab the font
+          mkdir -p dist/lib/fonts
+          cp lib/fonts/ChicagoFLF.ttf dist/lib/fonts/
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: diskpeek-windows-x86_64
+          path: dist/*
+
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-appimage, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release files
+        run: |
+          mkdir -p release
+
+          # Linux AppImage
+          cp artifacts/diskpeek-linux-appimage/diskpeek-x86_64.AppImage release/
+          cd release && zip diskpeek-linux-x86_64.zip diskpeek-x86_64.AppImage ../README.md ../COPYING && rm diskpeek-x86_64.AppImage && cd ..
+
+          # macOS binaries
+          for dir in artifacts/diskpeek-macos-*; do
+            cp "$dir"/diskpeek-macOS-* release/
+          done
+          cd release
+          for f in diskpeek-macOS-*; do
+            arch="${f#diskpeek-macOS-}"
+            zip "diskpeek-macOS-${arch}.zip" "$f" ../README.md ../COPYING
+            rm "$f"
+          done
+          cd ..
+
+          # Windows
+          cd artifacts/diskpeek-windows-x86_64
+          zip -r ../../release/diskpeek-windows-x86_64.zip . ../../README.md ../../COPYING
+          cd ../..
+
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true
+
+  deploy-pages:
+    name: Deploy GitHub Pages
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "imgui.h"
+#include "resedit.h"
 
 extern "C" {
 #include "hfs.h"
@@ -161,6 +162,13 @@ private:
     std::string format_size(unsigned long bytes);
     void set_error(const std::string& msg);
     static const TypeCreatorMap* lookup_type_creator(const char* filename);
+
+    // Resource browser (ResEdit) windows
+    std::vector<std::unique_ptr<ResEditWindow>> resedit_windows_;
+    void open_resources(const HFSEntry& entry, const std::string& hfs_path);
+    void render_resedit_windows();
+    HFSEntry dump_rsrc_entry_;
+    std::string dump_rsrc_hfs_path_;
 
     // Splash image (DogCow)
     GLuint dogcow_tex_ = 0;

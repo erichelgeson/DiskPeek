@@ -1,0 +1,36 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    meson \
+    ninja-build \
+    pkg-config \
+    libsdl3-dev \
+    libgl-dev \
+    libgles-dev \
+    zlib1g-dev \
+    libx11-dev \
+    file \
+    wget \
+    imagemagick \
+    && rm -rf /var/lib/apt/lists/*
+
+# SDL3 is not in Ubuntu 22.04 repos — build from source
+RUN apt-get update && apt-get install -y cmake git libwayland-dev libxkbcommon-dev \
+    libegl-dev libdrm-dev libgbm-dev libpulse-dev libasound2-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 --branch release-3.2.14 https://github.com/libsdl-org/SDL.git /tmp/SDL3 \
+    && cmake -S /tmp/SDL3 -B /tmp/SDL3/build -DCMAKE_INSTALL_PREFIX=/usr -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+    && cmake --build /tmp/SDL3/build -j$(nproc) \
+    && cmake --install /tmp/SDL3/build \
+    && rm -rf /tmp/SDL3
+
+# Download linuxdeploy
+RUN wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+    -O /usr/local/bin/linuxdeploy && chmod +x /usr/local/bin/linuxdeploy
+
+WORKDIR /build

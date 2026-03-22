@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Disk Peek
+Comment=Browse classic Macintosh HFS and HFS+ disk images
+Exec=hfsbrowser
+Icon=diskpeek
+Terminal=false
+Type=Application
+Categories=System;Utility;
+MimeType=application/x-apple-diskimage;
