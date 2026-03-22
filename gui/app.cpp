@@ -1419,6 +1419,24 @@ void App::render_file_list() {
                             picker_mode_ = PickerMode::EXPORT_ICON;
                             picker_refresh();
                         }
+                        if (ImGui::MenuItem("Copy Icon")) {
+                            // Write temp PNG then copy to clipboard via platform tool
+                            std::string tmp = "/tmp/hfsbrowser_icon.png";
+                            if (export_icon_png(tmp, e, ctx_hfs_path)) {
+#ifdef __APPLE__
+                                system(("osascript -e 'set the clipboard to (read (POSIX file \""
+                                        + tmp + "\") as «class PNGf»)' 2>/dev/null").c_str());
+#elif defined(_WIN32)
+                                // Windows: not implemented yet
+#else
+                                // Linux: try wl-copy (Wayland) then xclip (X11)
+                                if (system(("wl-copy --type image/png < " + tmp + " 2>/dev/null").c_str()) != 0)
+                                    if (system(("xclip -selection clipboard -t image/png < " + tmp + " 2>/dev/null").c_str()) != 0)
+                                        status_text_ = "Clipboard copy failed (install xclip or wl-copy)";
+#endif
+                                status_text_ = "Icon copied to clipboard";
+                            }
+                        }
                     }
 
                     // Fix-A-Fork: detect and set type/creator for files missing it
