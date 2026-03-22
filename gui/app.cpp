@@ -183,7 +183,6 @@ void App::init() {
     status_text_ = "Open an HFS disk image to begin (or drag & drop)";
 
     const char* home = getenv("HOME");
-    picker_path_ = home ? home : "/";
 }
 
 void App::shutdown() {
@@ -639,14 +638,14 @@ void App::render() {
     render_rename_popup();
     render_check_popup();
     render_about_popup();
-    render_file_picker();
+    process_dialog_result();
 
     ImGui::End();
 }
 
 void App::render_toolbar() {
     if (ImGui::Button("Open Image")) {
-        open_file_picker_for_open();
+        show_open_dialog();
     }
     ImGui::SameLine();
     if (ImGui::Button("About")) {
@@ -868,26 +867,23 @@ void App::render_file_list() {
                     // Default export: BinHex if has rsrc fork, regular otherwise
                     if (e.rsize > 0) {
                         if (ImGui::MenuItem("Export as BinHex (.hqx)")) {
-                            picker_mode_ = PickerMode::EXPORT_BINHEX;
-                            picker_refresh();
+                            show_export_binhex_dialog();
                         }
                         if (ImGui::MenuItem("Export (data fork + AppleDouble)")) {
-                            open_file_picker_for_export();
+                            show_export_dialog();
                         }
                     } else {
                         if (ImGui::MenuItem("Export")) {
-                            open_file_picker_for_export();
+                            show_export_dialog();
                         }
                         if (ImGui::MenuItem("Export as BinHex (.hqx)")) {
-                            picker_mode_ = PickerMode::EXPORT_BINHEX;
-                            picker_refresh();
+                            show_export_binhex_dialog();
                         }
                     }
 
                     if (e.icon_tex) {
                         if (ImGui::MenuItem("Save Icon as PNG")) {
-                            picker_mode_ = PickerMode::EXPORT_ICON;
-                            picker_refresh();
+                            show_export_icon_dialog();
                         }
                         if (ImGui::MenuItem("Copy Icon")) {
                             // Read icon RGBA and convert to PNG in memory
@@ -976,12 +972,10 @@ void App::render_file_list() {
                 } else {
                     // Directory context menu
                     if (ImGui::MenuItem("Export Folder")) {
-                        picker_mode_ = PickerMode::EXPORT_FILE;
-                        picker_refresh();
+                        show_export_dialog();
                     }
                     if (ImGui::MenuItem("Export Folder as BinHex")) {
-                        picker_mode_ = PickerMode::EXPORT_FOLDER_BINHEX;
-                        picker_refresh();
+                        show_export_folder_binhex_dialog();
                     }
                     ImGui::Separator();
                     bool already_blessed = (blessed_cnid_ != 0 && e.cnid == blessed_cnid_);
@@ -1075,7 +1069,7 @@ void App::render_action_bar() {
 
     if (ImGui::Button("Import")) {
         if (has_vol)
-            open_file_picker_for_import();
+            show_import_dialog();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Import a file or folder from your computer into the image");
@@ -1087,10 +1081,9 @@ void App::render_action_bar() {
         if (has_sel) {
             const HFSEntry& e = entries_[selected_entry_];
             if (e.is_dir) {
-                picker_mode_ = PickerMode::EXPORT_FILE;
-                picker_refresh();
+                show_export_dialog();
             } else {
-                open_file_picker_for_export();
+                show_export_dialog();
             }
         }
     }
@@ -1555,257 +1548,113 @@ void App::render_check_popup() {
     }
 }
 
-// --- File picker ---
+// --- Native file dialogs (SDL3) ---
 
-void App::render_file_picker() {
-    if (picker_mode_ == PickerMode::NONE) return;
-
-    const char* title = "Open HFS Image";
-    if (picker_mode_ == PickerMode::EXPORT_FILE || picker_mode_ == PickerMode::EXPORT_BINHEX ||
-        picker_mode_ == PickerMode::EXPORT_FOLDER_BINHEX || picker_mode_ == PickerMode::EXPORT_ICON)
-        title = "Save To";
-    else if (picker_mode_ == PickerMode::IMPORT_FILE) title = "Select File to Import";
-
-    if (!ImGui::IsPopupOpen(title)) {
-        // Re-refresh entries when the popup is about to open for the first time
-        picker_refresh();
-    }
-    ImGui::OpenPopup(title);
-
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(600, 450), ImGuiCond_Appearing);
-
-    if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_None)) {
-        ImGui::Text("Path:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##path", picker_input_, sizeof(picker_input_),
-                ImGuiInputTextFlags_EnterReturnsTrue)) {
-            std::error_code ec2;
-            auto fstatus = fs::status(picker_input_, ec2);
-            if (!ec2) {
-                if (fs::is_directory(fstatus)) {
-                    picker_navigate(picker_input_);
-                } else {
-                    std::string selected = picker_input_;
-                    PickerMode mode = picker_mode_;
-                    picker_mode_ = PickerMode::NONE;
-                    ImGui::CloseCurrentPopup();
-                    ImGui::EndPopup();
-
-                    if (mode == PickerMode::OPEN_IMAGE) {
-                        open_image(selected.c_str());
-                    } else if (mode == PickerMode::IMPORT_FILE) {
-                        copy_to_hfs_impl(selected);
-                    }
-                    return;
-                }
-            }
-        }
-
-        ImGui::Spacing();
-
-        ImGui::BeginChild("PickerList", ImVec2(0, -30), true);
-
-        if (ImGui::Selectable("  ..", false, ImGuiSelectableFlags_AllowDoubleClick)) {
-            if (ImGui::IsMouseDoubleClicked(0)) {
-                std::string parent = picker_path_;
-                size_t pos = parent.rfind('/');
-                if (pos != std::string::npos && pos > 0)
-                    picker_navigate(parent.substr(0, pos));
-                else
-                    picker_navigate("/");
-            }
-        }
-
-        for (int i = 0; i < (int)picker_entries_.size(); i++) {
-            const std::string& entry = picker_entries_[i];
-            bool is_dir = (!entry.empty() && entry.back() == '/');
-
-            bool selected = (picker_selected_ == i);
-            if (ImGui::Selectable(entry.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                picker_selected_ = i;
-                std::string full = picker_path_ + "/" + entry;
-                if (is_dir) full.pop_back();
-                snprintf(picker_input_, sizeof(picker_input_), "%s", full.c_str());
-
-                if (ImGui::IsMouseDoubleClicked(0)) {
-                    if (is_dir) {
-                        picker_navigate(full);
-                    } else {
-                        PickerMode mode = picker_mode_;
-                        picker_mode_ = PickerMode::NONE;
-                        ImGui::CloseCurrentPopup();
-                        ImGui::EndChild();
-                        ImGui::EndPopup();
-
-                        if (mode == PickerMode::OPEN_IMAGE) {
-                            open_image(full.c_str());
-                        } else if (mode == PickerMode::IMPORT_FILE) {
-                            copy_to_hfs_impl(full);
-                        } else if (mode == PickerMode::EXPORT_FILE) {
-                            copy_from_hfs_impl(full);
-                        } else if (mode == PickerMode::EXPORT_BINHEX) {
-                            if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                                const HFSEntry& e = entries_[selected_entry_];
-                                std::string hfs_path = current_path_ + e.name;
-                                std::string out = full;
-                                if (fs::is_directory(full))
-                                    out = full + "/" + e.name + ".hqx";
-                                export_as_binhex(out, e, hfs_path);
-                            }
-                        } else if (mode == PickerMode::EXPORT_FOLDER_BINHEX) {
-                            if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                                const HFSEntry& e = entries_[selected_entry_];
-                                std::string hfs_path = current_path_ + e.name + ":";
-                                std::string host_name = (vol_type_ == VolumeType::HFS)
-                                    ? macroman_to_utf8(e.name) : e.name;
-                                std::string dest = full;
-                                if (fs::is_directory(full))
-                                    dest = full + "/" + host_name;
-                                show_progress_ = true;
-                                export_folder_binhex(hfs_path, dest, e.cnid);
-                                show_progress_ = false;
-                                status_text_ = "Exported folder as BinHex: " + e.name;
-                            }
-                        } else if (mode == PickerMode::EXPORT_ICON) {
-                            if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                                const HFSEntry& e = entries_[selected_entry_];
-                                std::string hfs_path = current_path_ + e.name;
-                                std::string out = full;
-                                if (fs::is_directory(full))
-                                    out = full + "/" + e.name + ".png";
-                                export_icon_png(out, e, hfs_path);
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        ImGui::EndChild();
-
-        if (ImGui::Button("Select", ImVec2(80, 0))) {
-            std::string selected = picker_input_;
-            PickerMode mode = picker_mode_;
-            picker_mode_ = PickerMode::NONE;
-            ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-
-            if (!selected.empty()) {
-                if (mode == PickerMode::OPEN_IMAGE) {
-                    open_image(selected.c_str());
-                } else if (mode == PickerMode::IMPORT_FILE) {
-                    copy_to_hfs_impl(selected);
-                } else if (mode == PickerMode::EXPORT_FILE) {
-                    copy_from_hfs_impl(selected);
-                } else if (mode == PickerMode::EXPORT_BINHEX) {
-                    if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                        const HFSEntry& e = entries_[selected_entry_];
-                        std::string hfs_path = current_path_ + e.name;
-                        std::string out = selected;
-                        if (fs::is_directory(selected))
-                            out = selected + "/" + e.name + ".hqx";
-                        export_as_binhex(out, e, hfs_path);
-                    }
-                } else if (mode == PickerMode::EXPORT_FOLDER_BINHEX) {
-                    if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                        const HFSEntry& e = entries_[selected_entry_];
-                        std::string hfs_path = current_path_ + e.name + ":";
-                        std::string host_name = (vol_type_ == VolumeType::HFS)
-                            ? macroman_to_utf8(e.name) : e.name;
-                        std::string dest = selected;
-                        if (fs::is_directory(selected))
-                            dest = selected + "/" + host_name;
-                        show_progress_ = true;
-                        export_folder_binhex(hfs_path, dest);
-                        show_progress_ = false;
-                        status_text_ = "Exported folder as BinHex: " + e.name;
-                    }
-                } else if (mode == PickerMode::EXPORT_ICON) {
-                    if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
-                        const HFSEntry& e = entries_[selected_entry_];
-                        std::string hfs_path = current_path_ + e.name;
-                        std::string out = selected;
-                        if (fs::is_directory(selected))
-                            out = selected + "/" + e.name + ".png";
-                        export_icon_png(out, e, hfs_path);
-                    }
-                }
-            }
-            return;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
-            picker_mode_ = PickerMode::NONE;
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
+// SDL3 dialog callback — stores the result for processing next frame
+static void dialog_callback(void* userdata, const char* const* filelist, int /*filter*/) {
+    App* app = (App*)userdata;
+    if (filelist && filelist[0]) {
+        app->dialog_result_ = filelist[0];
     }
 }
 
-void App::picker_refresh() {
-    picker_entries_.clear();
-    picker_selected_ = -1;
+void App::show_open_dialog() {
+    pending_op_ = DialogOp::OPEN_IMAGE;
+    SDL_DialogFileFilter filters[] = { { "HFS Disk Images", "hda;img;dsk;iso;dmg;image" } };
+    SDL_ShowOpenFileDialog(dialog_callback, this, SDL_GetKeyboardFocus(), filters, 1, nullptr, false);
+}
 
-    std::error_code ec;
-    std::vector<std::string> dirs, files;
-    for (const auto& entry : fs::directory_iterator(picker_path_, ec)) {
-        if (ec) break;
-        std::string name = entry.path().filename().string();
-        if (name.empty() || name == "." || name == "..") continue;
-        if (!picker_show_hidden_ && name[0] == '.') continue;
+void App::show_export_dialog() {
+    pending_op_ = DialogOp::EXPORT_FILE;
+    SDL_ShowOpenFolderDialog(dialog_callback, this, SDL_GetKeyboardFocus(), nullptr, false);
+}
 
-        std::error_code ec2;
-        if (entry.is_directory(ec2)) {
-            dirs.push_back(name + "/");
-        } else if (!ec2) {
-            files.push_back(name);
+void App::show_import_dialog() {
+    pending_op_ = DialogOp::IMPORT_FILE;
+    SDL_ShowOpenFileDialog(dialog_callback, this, SDL_GetKeyboardFocus(), nullptr, 0, nullptr, true);
+}
+
+void App::show_export_binhex_dialog() {
+    pending_op_ = DialogOp::EXPORT_BINHEX;
+    SDL_ShowOpenFolderDialog(dialog_callback, this, SDL_GetKeyboardFocus(), nullptr, false);
+}
+
+void App::show_export_folder_binhex_dialog() {
+    pending_op_ = DialogOp::EXPORT_FOLDER_BINHEX;
+    SDL_ShowOpenFolderDialog(dialog_callback, this, SDL_GetKeyboardFocus(), nullptr, false);
+}
+
+void App::show_export_icon_dialog() {
+    pending_op_ = DialogOp::EXPORT_ICON;
+    SDL_ShowOpenFolderDialog(dialog_callback, this, SDL_GetKeyboardFocus(), nullptr, false);
+}
+
+void App::process_dialog_result() {
+    if (dialog_result_.empty()) return;
+
+    std::string path = dialog_result_;
+    dialog_result_.clear();
+    DialogOp op = pending_op_;
+    pending_op_ = DialogOp::NONE;
+
+    switch (op) {
+    case DialogOp::OPEN_IMAGE:
+        open_image(path.c_str());
+        break;
+    case DialogOp::EXPORT_FILE:
+        copy_from_hfs_impl(path);
+        break;
+    case DialogOp::IMPORT_FILE:
+        copy_to_hfs_impl(path);
+        break;
+    case DialogOp::EXPORT_BINHEX:
+        if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
+            const HFSEntry& e = entries_[selected_entry_];
+            std::string hfs_path = current_path_ + e.name;
+            std::string out = path + "/" + e.name + ".hqx";
+            export_as_binhex(out, e, hfs_path);
         }
+        break;
+    case DialogOp::EXPORT_FOLDER_BINHEX:
+        if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
+            const HFSEntry& e = entries_[selected_entry_];
+            std::string hfs_path = current_path_ + e.name + ":";
+            std::string host_name = (vol_type_ == VolumeType::HFS)
+                ? macroman_to_utf8(e.name) : e.name;
+            show_progress_ = true;
+            export_folder_binhex(hfs_path, path + "/" + host_name, e.cnid);
+            show_progress_ = false;
+            status_text_ = "Exported folder as BinHex: " + e.name;
+        }
+        break;
+    case DialogOp::EXPORT_ICON:
+        if (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size()) {
+            const HFSEntry& e = entries_[selected_entry_];
+            std::string hfs_path = current_path_ + e.name;
+            export_icon_png(path + "/" + e.name + ".png", e, hfs_path);
+        }
+        break;
+    default:
+        break;
     }
-
-    std::sort(dirs.begin(), dirs.end());
-    std::sort(files.begin(), files.end());
-
-    picker_entries_.insert(picker_entries_.end(), dirs.begin(), dirs.end());
-    picker_entries_.insert(picker_entries_.end(), files.begin(), files.end());
-
-    snprintf(picker_input_, sizeof(picker_input_), "%s", picker_path_.c_str());
 }
 
-void App::picker_navigate(const std::string& path) {
-    picker_path_ = path;
-    picker_refresh();
-}
-
-void App::open_file_picker_for_open() {
-    picker_mode_ = PickerMode::OPEN_IMAGE;
-    picker_refresh();
-}
-
-void App::open_file_picker_for_export() {
-    if (selected_entry_ < 0) return;
-    picker_mode_ = PickerMode::EXPORT_FILE;
-    picker_refresh();
-}
-
-void App::open_file_picker_for_import() {
-    picker_mode_ = PickerMode::IMPORT_FILE;
-    picker_refresh();
-}
+// Legacy stubs removed — old render_file_picker, picker_refresh, etc.
+// Now using SDL3 native file dialogs above.
 
 void App::copy_from_hfs() {
     if (!has_volume() || selected_entry_ < 0) return;
-    open_file_picker_for_export();
+    show_export_dialog();
 }
 
 void App::copy_to_hfs() {
     if (!has_volume()) return;
-    open_file_picker_for_import();
+    show_import_dialog();
 }
+
+// (deleted: render_file_picker, picker_refresh, picker_navigate,
+//  open_file_picker_for_open, open_file_picker_for_export, open_file_picker_for_import)
+
 
 void App::import_file(const char* path) {
     if (!has_volume()) return;

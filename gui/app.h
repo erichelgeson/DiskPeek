@@ -58,6 +58,9 @@ public:
     void import_file(const char* path);
     bool has_volume() const { return vol_ != nullptr; }
 
+    // Set by native dialog callback (must be public for C callback)
+    std::string dialog_result_;
+
 private:
     // UI rendering
     void render_toolbar();
@@ -67,7 +70,7 @@ private:
     void render_error_popup();
     void render_confirm_popup();
     void render_mkdir_popup();
-    void render_file_picker();
+    void process_dialog_result();
     void render_type_creator_popup();
     void render_info_popup();
     void render_rename_popup();
@@ -127,10 +130,13 @@ private:
                                   short fdflags,
                                   const std::vector<uint8_t>& rsrc_data);
 
-    // File picker helpers
-    void open_file_picker_for_open();
-    void open_file_picker_for_export();
-    void open_file_picker_for_import();
+    // Native file dialog helpers
+    void show_open_dialog();
+    void show_export_dialog();
+    void show_import_dialog();
+    void show_export_binhex_dialog();
+    void show_export_folder_binhex_dialog();
+    void show_export_icon_dialog();
 
     // Filename encoding conversion
     static std::string macroman_to_utf8(const std::string& macroman);
@@ -209,17 +215,10 @@ private:
     char info_type_[5] = {};
     char info_creator_[5] = {};
 
-    // File picker state
-    enum class PickerMode { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX, EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE, IMPORT_FOLDER };
-    PickerMode picker_mode_ = PickerMode::NONE;
-    std::string picker_path_;
-    char picker_input_[1024] = {};
-    std::vector<std::string> picker_entries_;
-    int picker_selected_ = -1;
-    bool picker_show_hidden_ = false;
-
-    void picker_refresh();
-    void picker_navigate(const std::string& path);
+    // Native file dialog state
+    enum class DialogOp { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX,
+                          EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE };
+    DialogOp pending_op_ = DialogOp::NONE;
 };
 
 #endif // APP_H
