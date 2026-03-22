@@ -16,6 +16,7 @@ extern "C" {
 }
 
 #include "hfsplus_ops.h"
+#include "faf.h"
 
 typedef unsigned int GLuint;
 
@@ -111,8 +112,8 @@ private:
     bool export_icon_png(const std::string& out_path, const HFSEntry& entry,
                          const std::string& hfs_path);
 
-    // Type/creator detection (magic bytes + FAF extension table)
-    struct TypeCreatorResult { char type[5]; char creator[5]; };
+    // Type/creator detection (delegates to libhfsbrowse)
+    using TypeCreatorResult = hfsbrowse::TypeCreatorResult;
     static bool detect_type_creator_magic(const uint8_t* data, size_t len,
                                           TypeCreatorResult* out);
     static bool detect_type_creator_ext(const char* filename, TypeCreatorResult* out);

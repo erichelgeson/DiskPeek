@@ -15,6 +15,10 @@
 #include <functional>
 
 #include "platform.h"
+#include "encoding.h"
+#include "faf.h"
+#include "icon.h"
+#include "appledouble.h"
 
 namespace fs = std::filesystem;
 
@@ -26,7 +30,6 @@ extern "C" {
 }
 #pragma GCC diagnostic pop
 
-#include <zlib.h>
 
 // --- Big-endian helpers ---
 
@@ -51,397 +54,29 @@ static void write_u32be(uint8_t* p, uint32_t v) {
     p[3] = v & 0xFF;
 }
 
-// --- Resource fork parsing ---
+// --- Resource fork parsing and icon decoding now in lib/hfsbrowse/icon.cpp ---
 
-// Find a resource by type code in a resource fork blob.
-// Returns pointer to resource data and sets *out_len, or nullptr if not found.
-static const uint8_t* find_resource(const std::vector<uint8_t>& rsrc,
-                                     uint32_t res_type, int16_t res_id,
-                                     uint32_t* out_len) {
-    if (rsrc.size() < 16) return nullptr;
-    const uint8_t* base = rsrc.data();
-    size_t total = rsrc.size();
+// (removed: find_resource, icon_from_icn/icl4/icl8, color tables, png_write_chunk
+//  — all moved to libhfsbrowse)
 
-    uint32_t data_offset = read_u32be(base + 0);
-    uint32_t map_offset  = read_u32be(base + 4);
 
-    if (map_offset + 30 > total) return nullptr;
+// --- Type/creator detection: delegate to libhfsbrowse ---
 
-    uint16_t type_list_off = read_u16be(base + map_offset + 24);
-    uint32_t type_list_abs = map_offset + type_list_off;
+bool App::detect_type_creator_ext(const char* f, TypeCreatorResult* o) { return hfsbrowse::detect_type_creator_ext(f, o); }
+bool App::detect_type_creator_magic(const uint8_t* d, size_t l, TypeCreatorResult* o) { return hfsbrowse::detect_type_creator_magic(d, l, o); }
 
-    if (type_list_abs + 2 > total) return nullptr;
-
-    uint16_t num_types = read_u16be(base + type_list_abs) + 1;
-
-    for (uint16_t t = 0; t < num_types; t++) {
-        uint32_t te = type_list_abs + 2 + t * 8;
-        if (te + 8 > total) break;
-
-        uint32_t this_type = read_u32be(base + te);
-        uint16_t count     = read_u16be(base + te + 4) + 1;
-        uint16_t ref_off   = read_u16be(base + te + 6);
-
-        if (this_type != res_type) continue;
-
-        uint32_t ref_abs = type_list_abs + ref_off;
-        for (uint16_t r = 0; r < count; r++) {
-            uint32_t re = ref_abs + r * 12;
-            if (re + 12 > total) break;
-
-            int16_t rid = (int16_t)read_u16be(base + re);
-            if (rid != res_id) continue;
-
-            // 3-byte data offset at re+5
-            uint32_t d_off = ((uint32_t)base[re + 5] << 16) |
-                             ((uint32_t)base[re + 6] << 8) |
-                             base[re + 7];
-            uint32_t d_abs = data_offset + d_off;
-            if (d_abs + 4 > total) return nullptr;
-
-            uint32_t d_len = read_u32be(base + d_abs);
-            if (d_abs + 4 + d_len > total) return nullptr;
-
-            *out_len = d_len;
-            return base + d_abs + 4;
-        }
-    }
-    return nullptr;
-}
-
-// Classic Mac 8-bit system color table (256 entries, the standard clut)
-// This is the standard Mac OS 256-color palette used by icl8 resources.
-static const uint8_t mac_clut_rgb[256][3] = {
-    {255,255,255},{255,255,204},{255,255,153},{255,255,102},{255,255,51},{255,255,0},
-    {255,204,255},{255,204,204},{255,204,153},{255,204,102},{255,204,51},{255,204,0},
-    {255,153,255},{255,153,204},{255,153,153},{255,153,102},{255,153,51},{255,153,0},
-    {255,102,255},{255,102,204},{255,102,153},{255,102,102},{255,102,51},{255,102,0},
-    {255,51,255},{255,51,204},{255,51,153},{255,51,102},{255,51,51},{255,51,0},
-    {255,0,255},{255,0,204},{255,0,153},{255,0,102},{255,0,51},{255,0,0},
-    {204,255,255},{204,255,204},{204,255,153},{204,255,102},{204,255,51},{204,255,0},
-    {204,204,255},{204,204,204},{204,204,153},{204,204,102},{204,204,51},{204,204,0},
-    {204,153,255},{204,153,204},{204,153,153},{204,153,102},{204,153,51},{204,153,0},
-    {204,102,255},{204,102,204},{204,102,153},{204,102,102},{204,102,51},{204,102,0},
-    {204,51,255},{204,51,204},{204,51,153},{204,51,102},{204,51,51},{204,51,0},
-    {204,0,255},{204,0,204},{204,0,153},{204,0,102},{204,0,51},{204,0,0},
-    {153,255,255},{153,255,204},{153,255,153},{153,255,102},{153,255,51},{153,255,0},
-    {153,204,255},{153,204,204},{153,204,153},{153,204,102},{153,204,51},{153,204,0},
-    {153,153,255},{153,153,204},{153,153,153},{153,153,102},{153,153,51},{153,153,0},
-    {153,102,255},{153,102,204},{153,102,153},{153,102,102},{153,102,51},{153,102,0},
-    {153,51,255},{153,51,204},{153,51,153},{153,51,102},{153,51,51},{153,51,0},
-    {153,0,255},{153,0,204},{153,0,153},{153,0,102},{153,0,51},{153,0,0},
-    {102,255,255},{102,255,204},{102,255,153},{102,255,102},{102,255,51},{102,255,0},
-    {102,204,255},{102,204,204},{102,204,153},{102,204,102},{102,204,51},{102,204,0},
-    {102,153,255},{102,153,204},{102,153,153},{102,153,102},{102,153,51},{102,153,0},
-    {102,102,255},{102,102,204},{102,102,153},{102,102,102},{102,102,51},{102,102,0},
-    {102,51,255},{102,51,204},{102,51,153},{102,51,102},{102,51,51},{102,51,0},
-    {102,0,255},{102,0,204},{102,0,153},{102,0,102},{102,0,51},{102,0,0},
-    {51,255,255},{51,255,204},{51,255,153},{51,255,102},{51,255,51},{51,255,0},
-    {51,204,255},{51,204,204},{51,204,153},{51,204,102},{51,204,51},{51,204,0},
-    {51,153,255},{51,153,204},{51,153,153},{51,153,102},{51,153,51},{51,153,0},
-    {51,102,255},{51,102,204},{51,102,153},{51,102,102},{51,102,51},{51,102,0},
-    {51,51,255},{51,51,204},{51,51,153},{51,51,102},{51,51,51},{51,51,0},
-    {51,0,255},{51,0,204},{51,0,153},{51,0,102},{51,0,51},{51,0,0},
-    {0,255,255},{0,255,204},{0,255,153},{0,255,102},{0,255,51},{0,255,0},
-    {0,204,255},{0,204,204},{0,204,153},{0,204,102},{0,204,51},{0,204,0},
-    {0,153,255},{0,153,204},{0,153,153},{0,153,102},{0,153,51},{0,153,0},
-    {0,102,255},{0,102,204},{0,102,153},{0,102,102},{0,102,51},{0,102,0},
-    {0,51,255},{0,51,204},{0,51,153},{0,51,102},{0,51,51},{0,51,0},
-    {0,0,255},{0,0,204},{0,0,153},{0,0,102},{0,0,51},
-    {238,0,0},{221,0,0},{187,0,0},{170,0,0},{136,0,0},
-    {119,0,0},{85,0,0},{68,0,0},{34,0,0},{17,0,0},
-    {0,238,0},{0,221,0},{0,187,0},{0,170,0},{0,136,0},
-    {0,119,0},{0,85,0},{0,68,0},{0,34,0},{0,17,0},
-    {0,0,238},{0,0,221},{0,0,187},{0,0,170},{0,0,136},
-    {0,0,119},{0,0,85},{0,0,68},{0,0,34},{0,0,17},
-    {238,238,238},{221,221,221},{187,187,187},{170,170,170},{136,136,136},
-    {119,119,119},{85,85,85},{68,68,68},{34,34,34},{17,17,17},
-    {0,0,0},
-};
-
-// Convert ICN# (32x32 1-bit icon + mask, 256 bytes) to RGBA, pixel-doubled to 64x64.
-static std::vector<uint8_t> icon_from_icn(const uint8_t* data, uint32_t len) {
-    if (len < 256) return {};
-
-    const uint8_t* icon_bits = data;
-    const uint8_t* mask_bits = data + 128;
-
-    std::vector<uint8_t> rgba(64 * 64 * 4);
-
-    for (int y = 0; y < 32; y++) {
-        for (int x = 0; x < 32; x++) {
-            int byte_idx = y * 4 + x / 8;
-            int bit = 7 - (x % 8);
-
-            bool icon_set = (icon_bits[byte_idx] >> bit) & 1;
-            bool mask_set = (mask_bits[byte_idx] >> bit) & 1;
-
-            uint8_t r, g, b, a;
-            if (mask_set) {
-                uint8_t c = icon_set ? 0 : 255;
-                r = g = b = c; a = 255;
-            } else {
-                r = g = b = 0; a = 0;
-            }
-
-            // Pixel-double: write 2x2 block
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
-                    int idx = ((y*2+dy) * 64 + (x*2+dx)) * 4;
-                    rgba[idx+0] = r; rgba[idx+1] = g;
-                    rgba[idx+2] = b; rgba[idx+3] = a;
-                }
-            }
-        }
-    }
-    return rgba;
-}
-
-// Mac 4-bit system color palette (16 entries)
-static const uint8_t mac_clut4_rgb[16][3] = {
-    {255,255,255}, // 0: White
-    {252,243,5},   // 1: Yellow
-    {255,100,2},   // 2: Orange
-    {221,8,6},     // 3: Red
-    {242,8,132},   // 4: Magenta
-    {71,0,165},    // 5: Purple
-    {0,0,212},     // 6: Blue
-    {2,171,234},   // 7: Cyan
-    {31,183,20},   // 8: Green
-    {0,100,18},    // 9: Dark Green
-    {86,44,5},     // 10: Brown
-    {144,113,58},  // 11: Tan
-    {192,192,192}, // 12: Light Gray
-    {128,128,128}, // 13: Medium Gray
-    {64,64,64},    // 14: Dark Gray
-    {0,0,0},       // 15: Black
-};
-
-// Convert icl4 (32x32 4-bit color icon, 512 bytes) with ICN# mask to RGBA, pixel-doubled to 64x64.
-static std::vector<uint8_t> icon_from_icl4(const uint8_t* color_data, uint32_t color_len,
-                                            const uint8_t* mask_data, uint32_t mask_len) {
-    if (color_len < 512) return {};
-
-    const uint8_t* mask_bits = nullptr;
-    if (mask_data && mask_len >= 256)
-        mask_bits = mask_data + 128;
-
-    std::vector<uint8_t> rgba(64 * 64 * 4);
-
-    for (int y = 0; y < 32; y++) {
-        for (int x = 0; x < 32; x++) {
-            // 4 bits per pixel, 2 pixels per byte
-            int byte_off = y * 16 + x / 2;
-            uint8_t cidx = (x & 1) ? (color_data[byte_off] & 0x0F) : (color_data[byte_off] >> 4);
-            uint8_t r = mac_clut4_rgb[cidx][0];
-            uint8_t g = mac_clut4_rgb[cidx][1];
-            uint8_t b = mac_clut4_rgb[cidx][2];
-            uint8_t a = 255;
-
-            if (mask_bits) {
-                int mbyte = y * 4 + x / 8;
-                int mbit = 7 - (x % 8);
-                if (!((mask_bits[mbyte] >> mbit) & 1))
-                    a = 0;
-            } else if (cidx == 0) {
-                a = 0; // White = transparent if no mask
-            }
-
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
-                    int idx = ((y*2+dy) * 64 + (x*2+dx)) * 4;
-                    rgba[idx+0] = r; rgba[idx+1] = g;
-                    rgba[idx+2] = b; rgba[idx+3] = a;
-                }
-            }
-        }
-    }
-    return rgba;
-}
-
-// Convert icl8 (32x32 8-bit color icon, 1024 bytes) with ICN# mask to RGBA, pixel-doubled to 64x64.
-static std::vector<uint8_t> icon_from_icl8(const uint8_t* color_data, uint32_t color_len,
-                                             const uint8_t* mask_data, uint32_t mask_len) {
-    if (color_len < 1024) return {};
-
-    // mask is from ICN# (256 bytes: 128 icon + 128 mask), mask starts at offset 128
-    const uint8_t* mask_bits = nullptr;
-    if (mask_data && mask_len >= 256)
-        mask_bits = mask_data + 128;
-
-    std::vector<uint8_t> rgba(64 * 64 * 4);
-
-    for (int y = 0; y < 32; y++) {
-        for (int x = 0; x < 32; x++) {
-            uint8_t cidx = color_data[y * 32 + x];
-            uint8_t r = mac_clut_rgb[cidx][0];
-            uint8_t g = mac_clut_rgb[cidx][1];
-            uint8_t b = mac_clut_rgb[cidx][2];
-            uint8_t a = 255;
-
-            if (mask_bits) {
-                int byte_idx = y * 4 + x / 8;
-                int bit = 7 - (x % 8);
-                if (!((mask_bits[byte_idx] >> bit) & 1))
-                    a = 0;
-            } else if (cidx == 255) {
-                // Index 255 = white, treat as transparent if no mask
-                a = 0;
-            }
-
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
-                    int idx = ((y*2+dy) * 64 + (x*2+dx)) * 4;
-                    rgba[idx+0] = r; rgba[idx+1] = g;
-                    rgba[idx+2] = b; rgba[idx+3] = a;
-                }
-            }
-        }
-    }
-    return rgba;
-}
-
-// --- Fix-A-Fork type/creator extension table (from BlueSCSI SCSITransfer) ---
-
-struct FAFExtEntry {
-    const char* ext;
-    const char type[5];
-    const char creator[5];
-};
-
-static const FAFExtEntry s_faf_ext_table[] = {
-    {"1st","TEXT","ttxt"},{"669","6669","SNPL"},{"8med","STrk","SCPL"},
-    {"8svx","8SVX","SCPL"},{"aif","AIFF","SCPL"},{"aifc","AIFC","SCPL"},
-    {"aiff","AIFF","SCPL"},{"al","ALAW","SCPL"},{"arc","mArc","SITx"},
-    {"arj","BINA","DArj"},{"asc","TEXT","ttxt"},{"asm","TEXT","ttxt"},
-    {"au","ULAW","TVOD"},{"avi","VfW ","TVOD"},{"bas","TEXT","ttxt"},
-    {"bat","TEXT","ttxt"},{"bin","BINA","SITx"},{"bmp","BMPp","ogle"},
-    {"bz","Bzp2","SITx"},{"c","TEXT","KAHL"},{"class","Clss","CWIE"},
-    {"cmd","TEXT","ttxt"},{"com","PCFA","SWIN"},{"cpp","TEXT","CWIE"},
-    {"cpt","PACT","SITx"},{"csv","TEXT","XCEL"},{"cur","CUR ","GKON"},
-    {"cvs","drw2","DAD2"},{"cwj","CWSS","cwkj"},{"doc","WDBN","MSWD"},
-    {"dot","sDBN","MSWD"},{"dsk","dimg","dCpy"},{"dvi","ODVI","xdvi"},
-    {"dxf","TEXT","SWVL"},{"eps","EPSF","vgrd"},{"epsf","EPSF","vgrd"},
-    {"exe","PCFA","SWIN"},{"faq","TEXT","ttxt"},{"fla","SPA ","MFL2"},
-    {"flc","FLI ","TVOD"},{"fli","FLI ","TVOD"},{"fm","FMPR","FMPR"},
-    {"gif","GIFf","ogle"},{"gz","SIT!","SITx"},{"h","TEXT","KAHL"},
-    {"hqx","TEXT","SITx"},{"htm","TEXT","MOSS"},{"html","TEXT","MOSS"},
-    {"ico","ICO ","GKON"},{"iff","ILBM","GKON"},{"img","dImg","ddsk"},
-    {"ini","TEXT","ttxt"},{"iso","rodh","ddsk"},{"java","TEXT","CWIE"},
-    {"jfif","JPEG","ogle"},{"jpeg","JPEG","ogle"},{"jpg","JPEG","ogle"},
-    {"lha","LHA ","SITx"},{"lzh","LHA ","SITx"},{"mac","PICT","ogle"},
-    {"mcw","WDBN","MSWD"},{"me","TEXT","ttxt"},{"mid","Midi","TVOD"},
-    {"midi","Midi","TVOD"},{"mod","STrk","SCPL"},{"moov","MooV","TVOD"},
-    {"mov","MooV","TVOD"},{"mp2","MPEG","TVOD"},{"mp3","MPG3","TVOD"},
-    {"mpa","MPEG","TVOD"},{"mpeg","MPEG","TVOD"},{"mpg","MPEG","TVOD"},
-    {"nfo","TEXT","ttxt"},{"p","TEXT","CWIE"},{"pas","TEXT","CWIE"},
-    {"pbm","PPGM","GKON"},{"pct","PICT","ogle"},{"pcx","PCXx","GKON"},
-    {"pdf","PDF ","CARO"},{"pgm","PPGM","GKON"},{"pic","PICT","ogle"},
-    {"pict","PICT","ogle"},{"pit","PIT ","SITx"},{"pl","TEXT","McPL"},
-    {"png","PNG ","ogle"},{"pntg","PNTG","ogle"},{"ppm","PPGM","GKON"},
-    {"ps","TEXT","vgrd"},{"psd","8BPS","8BIM"},{"qt","MooV","TVOD"},
-    {"qxd","XDOC","XPR3"},{"raw","rodh","ddsk"},{"readme","TEXT","ttxt"},
-    {"rgb","SGI ","GKON"},{"rme","TEXT","ttxt"},{"rsrc","rsrc","RSED"},
-    {"rtf","TEXT","MSWD"},{"s3m","S3M ","SNPL"},{"sea","APPL","????"},
-    {"sgi",".SGI","ogle"},{"sit","SIT!","SITx"},{"snd","BINA","SCPL"},
-    {"swf","SWFL","SWF2"},{"tar","TARF","SITx"},{"tex","TEXT","OTEX"},
-    {"text","TEXT","ttxt"},{"tga","TPIC","GKON"},{"tgz","Gzip","SITx"},
-    {"tif","TIFF","ogle"},{"tiff","TIFF","ogle"},{"toast","CDr3","GImg"},
-    {"txt","TEXT","ttxt"},{"url","AURL","Arch"},{"uu","TEXT","SITx"},
-    {"uue","TEXT","SITx"},{"voc","VOC ","SCPL"},{"wav","WAVE","TVOD"},
-    {"wmf","WMF ","GKON"},{"wp","WP5 ","WPC2"},{"wri","WDBN","MSWD"},
-    {"xbm","XBM ","GKON"},{"xlc","XLC ","XCEL"},{"xls","XLS ","XCEL"},
-    {"xlw","XLW ","XCEL"},{"xm","XM  ","SNPL"},{"xpm","XPM ","GKON"},
-    {"zip","ZIP ","SITx"},{"zoo","Zoo ","Booz"},
-};
-
-// Detect type/creator from file extension (FAF table)
-bool App::detect_type_creator_ext(const char* filename, TypeCreatorResult* out) {
-    const char* dot = strrchr(filename, '.');
-    if (!dot || dot[1] == '\0') return false;
-    const char* ext = dot + 1;
-
-    for (size_t i = 0; i < sizeof(s_faf_ext_table)/sizeof(s_faf_ext_table[0]); i++) {
-        if (strcasecmp(ext, s_faf_ext_table[i].ext) == 0) {
-            memcpy(out->type, s_faf_ext_table[i].type, 5);
-            memcpy(out->creator, s_faf_ext_table[i].creator, 5);
-            return true;
-        }
-    }
-    return false;
-}
-
-// Detect type/creator from file magic bytes
-bool App::detect_type_creator_magic(const uint8_t* data, size_t len, TypeCreatorResult* out) {
-    if (len < 4) return false;
-
-    // BinHex 4.0
-    if (len >= 45 && memcmp(data + 34, "BinHex 4.0", 10) == 0) {
-        memcpy(out->type, "TEXT", 5); memcpy(out->creator, "SITx", 5); return true;
-    }
-    // StuffIt 5.x
-    if (len >= 16 && memcmp(data, "StuffIt (c)1997", 15) == 0) {
-        memcpy(out->type, "SITD", 5); memcpy(out->creator, "SIT!", 5); return true;
-    }
-    // StuffIt 1.5-4.5
-    if (len >= 4 && memcmp(data, "SIT!", 4) == 0) {
-        memcpy(out->type, "SIT!", 5); memcpy(out->creator, "SIT!", 5); return true;
-    }
-    // Zip
-    if (len >= 2 && data[0] == 'P' && data[1] == 'K') {
-        memcpy(out->type, "ZIP ", 5); memcpy(out->creator, "SITx", 5); return true;
-    }
-    // GIF
-    if (len >= 4 && memcmp(data, "GIF8", 4) == 0) {
-        memcpy(out->type, "GIFf", 5); memcpy(out->creator, "ogle", 5); return true;
-    }
-    // PNG
-    if (len >= 4 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
-        memcpy(out->type, "PNG ", 5); memcpy(out->creator, "ogle", 5); return true;
-    }
-    // JPEG
-    if (len >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
-        memcpy(out->type, "JPEG", 5); memcpy(out->creator, "ogle", 5); return true;
-    }
-    // PDF
-    if (len >= 5 && memcmp(data, "%PDF-", 5) == 0) {
-        memcpy(out->type, "PDF ", 5); memcpy(out->creator, "CARO", 5); return true;
-    }
-    // Disk Copy 4.2
-    if (len >= 54 && data[52] == 0x01 && data[53] == 0x00) {
-        memcpy(out->type, "dImg", 5); memcpy(out->creator, "dCpy", 5); return true;
-    }
-
-    return false;
-}
-
-// Legacy lookup (thin wrapper for old call sites)
 const TypeCreatorMap* App::lookup_type_creator(const char* filename) {
-    // Use a small static table for the legacy interface
     static const TypeCreatorMap s_type_creator_map[] = {
-        { ".txt",  "TEXT", "ttxt" },
-        { ".text", "TEXT", "ttxt" },
-        { ".hqx",  "TEXT", "SITx" },
-        { ".bin",  "BINA", "SITx" },
-        { ".sit",  "SIT!", "SITx" },
-        { ".jpg",  "JPEG", "ogle" },
-        { ".jpeg", "JPEG", "ogle" },
-        { ".gif",  "GIFf", "ogle" },
-        { ".png",  "PNG ", "ogle" },
-        { ".zip",  "ZIP ", "SITx" },
-        { ".pdf",  "PDF ", "CARO" },
-        { ".doc",  "WDBN", "MSWD" },
-        { ".sea",  "APPL", "????" },
-        { nullptr, nullptr, nullptr },
+        { ".txt",  "TEXT", "ttxt" }, { ".hqx",  "TEXT", "SITx" },
+        { ".sit",  "SIT!", "SITx" }, { ".jpg",  "JPEG", "ogle" },
+        { ".gif",  "GIFf", "ogle" }, { ".png",  "PNG ", "ogle" },
+        { ".zip",  "ZIP ", "SITx" }, { ".pdf",  "PDF ", "CARO" },
+        { ".sea",  "APPL", "????" }, { nullptr, nullptr, nullptr },
     };
-
     const char* dot = strrchr(filename, '.');
     if (!dot) return nullptr;
-
-    for (const TypeCreatorMap* m = s_type_creator_map; m->ext; m++) {
-        if (strcasecmp(dot, m->ext) == 0)
-            return m;
-    }
+    for (const TypeCreatorMap* m = s_type_creator_map; m->ext; m++)
+        if (strcasecmp(dot, m->ext) == 0) return m;
     return nullptr;
 }
 
@@ -1009,42 +644,17 @@ std::vector<uint8_t> App::read_rsrc_fork(const std::string& hfs_path) {
 }
 
 GLuint App::create_icon_from_rsrc(const std::vector<uint8_t>& rsrc) {
-    static const int16_t ids_to_try[] = { 128, -16455, 0 };
+    std::vector<uint8_t> rgba = hfsbrowse::icon::extract_rgba(rsrc);
+    if (rgba.empty()) return 0;
 
-    uint32_t ICN_TYPE  = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
-    uint32_t ICL8_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '8';
-    uint32_t ICL4_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '4';
-
-    for (int i = 0; ids_to_try[i] != 0 || i < 2; i++) {
-        uint32_t color8_len = 0, color4_len = 0, mask_len = 0;
-        const uint8_t* color8_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color8_len);
-        const uint8_t* color4_data = find_resource(rsrc, ICL4_TYPE, ids_to_try[i], &color4_len);
-        const uint8_t* mask_data = find_resource(rsrc, ICN_TYPE, ids_to_try[i], &mask_len);
-
-        std::vector<uint8_t> rgba;
-
-        // Try icl8 (256 color) first, then icl4 (16 color), then ICN# (1-bit)
-        if (color8_data && color8_len >= 1024) {
-            rgba = icon_from_icl8(color8_data, color8_len, mask_data, mask_len);
-        } else if (color4_data && color4_len >= 512) {
-            rgba = icon_from_icl4(color4_data, color4_len, mask_data, mask_len);
-        } else if (mask_data && mask_len >= 256) {
-            rgba = icon_from_icn(mask_data, mask_len);
-        }
-
-        if (rgba.empty()) continue;
-
-        // rgba is 64x64 pixel-doubled
-        GLuint tex;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-        return tex;
-    }
-    return 0;
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    return tex;
 }
 
 void App::load_entry_icons() {
@@ -2494,73 +2104,7 @@ bool App::write_appledouble(const std::string& host_path,
                             const char* type, const char* creator,
                             short fdflags,
                             const std::vector<uint8_t>& rsrc_data) {
-    // Build ._filename path
-    std::string dir, base;
-    size_t slash = host_path.rfind('/');
-    if (slash != std::string::npos) {
-        dir = host_path.substr(0, slash + 1);
-        base = host_path.substr(slash + 1);
-    } else {
-        dir = "";
-        base = host_path;
-    }
-    std::string ad_path = dir + "._" + base;
-
-    // Layout
-    const uint32_t header_size = 26;
-    const uint32_t num_entries = 2;
-    const uint32_t entry_desc_size = num_entries * 12;
-    const uint32_t finder_info_offset = header_size + entry_desc_size; // 50
-    const uint32_t finder_info_len = 32;
-    const uint32_t rsrc_offset = finder_info_offset + finder_info_len; // 82
-    const uint32_t rsrc_len = (uint32_t)rsrc_data.size();
-
-    std::vector<uint8_t> ad(rsrc_offset + rsrc_len, 0);
-
-    // Header
-    write_u32be(ad.data() + 0, 0x00051607);  // AppleDouble magic
-    write_u32be(ad.data() + 4, 0x00020000);  // Version 2.0
-    // bytes 8-23: filler (zeros)
-    write_u16be(ad.data() + 24, num_entries);
-
-    // Entry 1: Finder Info (ID=9)
-    write_u32be(ad.data() + 26, 9);
-    write_u32be(ad.data() + 30, finder_info_offset);
-    write_u32be(ad.data() + 34, finder_info_len);
-
-    // Entry 2: Resource Fork (ID=2)
-    write_u32be(ad.data() + 38, 2);
-    write_u32be(ad.data() + 42, rsrc_offset);
-    write_u32be(ad.data() + 46, rsrc_len);
-
-    // Finder Info: type(4) + creator(4) + flags(2) + location(4) + folder(2) + extended(16) = 32
-    uint8_t* fi = ad.data() + finder_info_offset;
-    if (type && strlen(type) == 4)
-        memcpy(fi + 0, type, 4);
-    if (creator && strlen(creator) == 4)
-        memcpy(fi + 4, creator, 4);
-    write_u16be(fi + 8, (uint16_t)fdflags);
-    // location and extended: zeros
-
-    // Resource fork data
-    if (rsrc_len > 0) {
-        memcpy(ad.data() + rsrc_offset, rsrc_data.data(), rsrc_len);
-    }
-
-    FILE* f = fopen(ad_path.c_str(), "wb");
-    if (!f) {
-        fprintf(stderr, "hfsbrowser: failed to create AppleDouble file: %s\n", ad_path.c_str());
-        return false;
-    }
-
-    bool ok = fwrite(ad.data(), 1, ad.size(), f) == ad.size();
-    fclose(f);
-
-    if (ok) {
-        fprintf(stderr, "hfsbrowser: wrote AppleDouble: %s (%zu bytes, rsrc=%u)\n",
-                ad_path.c_str(), ad.size(), rsrc_len);
-    }
-    return ok;
+    return hfsbrowse::write_appledouble(host_path, type, creator, fdflags, rsrc_data);
 }
 
 // --- Copy operations ---
@@ -2645,10 +2189,7 @@ void App::export_entry(const HFSEntry& e, const std::string& hfs_path,
     }
 
     if ((e.type[0] && strcmp(e.type, "????") != 0) || !rsrc.empty()) {
-        // Try native xattrs first, fall back to AppleDouble
-        if (!platform_write_xattr_forkinfo(out_path.c_str(), e.type, e.creator,
-                                            e.fdflags, rsrc.data(), rsrc.size()))
-            write_appledouble(out_path, e.type, e.creator, e.fdflags, rsrc);
+        hfsbrowse::write_forkinfo(out_path, e.type, e.creator, e.fdflags, rsrc);
     }
 
     fprintf(stderr, "hfsbrowser: exported %s (%lu bytes)\n", e.name.c_str(), total);
@@ -3253,103 +2794,17 @@ bool App::import_from_binhex(const std::string& host_path) {
     return true;
 }
 
-// --- Minimal PNG writer (using zlib for deflate) ---
-
-static uint32_t crc32_png(const uint8_t* data, size_t len) {
-    return (uint32_t)crc32(0, data, (uInt)len);
-}
-
-static void png_write_chunk(FILE* f, const char* type, const uint8_t* data, uint32_t len) {
-    uint8_t hdr[4];
-    write_u32be(hdr, len);
-    fwrite(hdr, 1, 4, f);
-    fwrite(type, 1, 4, f);
-    if (len > 0) fwrite(data, 1, len, f);
-
-    // CRC over type + data
-    uint32_t c = crc32_png((const uint8_t*)type, 4);
-    if (len > 0) c = (uint32_t)crc32(c, data, (uInt)len);
-    write_u32be(hdr, c);
-    fwrite(hdr, 1, 4, f);
-}
-
 bool App::export_icon_png(const std::string& out_path, const HFSEntry& /* entry */,
                           const std::string& hfs_path) {
-    // Read resource fork and create icon RGBA data (64x64 pixel-doubled)
     std::vector<uint8_t> rsrc = read_rsrc_fork(hfs_path);
     if (rsrc.empty()) return false;
 
-    // Re-use the icon creation logic to get 64x64 RGBA
-    uint32_t ICN_TYPE  = ('I' << 24) | ('C' << 16) | ('N' << 8) | '#';
-    uint32_t ICL8_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '8';
-    uint32_t ICL4_TYPE = ('i' << 24) | ('c' << 16) | ('l' << 8) | '4';
-    static const int16_t ids_to_try[] = { 128, -16455, 0 };
-
-    std::vector<uint8_t> rgba;
-    for (int i = 0; ids_to_try[i] != 0 || i < 2; i++) {
-        uint32_t color8_len = 0, color4_len = 0, mask_len = 0;
-        const uint8_t* color8_data = find_resource(rsrc, ICL8_TYPE, ids_to_try[i], &color8_len);
-        const uint8_t* color4_data = find_resource(rsrc, ICL4_TYPE, ids_to_try[i], &color4_len);
-        const uint8_t* mask_data = find_resource(rsrc, ICN_TYPE, ids_to_try[i], &mask_len);
-
-        if (color8_data && color8_len >= 1024)
-            rgba = icon_from_icl8(color8_data, color8_len, mask_data, mask_len);
-        else if (color4_data && color4_len >= 512)
-            rgba = icon_from_icl4(color4_data, color4_len, mask_data, mask_len);
-        else if (mask_data && mask_len >= 256)
-            rgba = icon_from_icn(mask_data, mask_len);
-
-        if (!rgba.empty()) break;
-    }
-
+    std::vector<uint8_t> rgba = hfsbrowse::icon::extract_rgba(rsrc);
     if (rgba.empty()) return false;
 
-    const int width = 64, height = 64;
-
-    // Build raw PNG image data: filter byte (0) + RGBA row for each row
-    std::vector<uint8_t> raw;
-    raw.reserve(height * (1 + width * 4));
-    for (int y = 0; y < height; y++) {
-        raw.push_back(0); // filter: none
-        raw.insert(raw.end(), rgba.begin() + y * width * 4,
-                   rgba.begin() + (y + 1) * width * 4);
-    }
-
-    // Deflate
-    uLongf compressed_size = compressBound((uLong)raw.size());
-    std::vector<uint8_t> compressed(compressed_size);
-    if (compress2(compressed.data(), &compressed_size, raw.data(), (uLong)raw.size(), 9) != Z_OK)
-        return false;
-    compressed.resize(compressed_size);
-
-    FILE* f = fopen(out_path.c_str(), "wb");
-    if (!f) return false;
-
-    // PNG signature
-    const uint8_t png_sig[] = {137, 80, 78, 71, 13, 10, 26, 10};
-    fwrite(png_sig, 1, 8, f);
-
-    // IHDR
-    uint8_t ihdr[13];
-    write_u32be(ihdr + 0, width);
-    write_u32be(ihdr + 4, height);
-    ihdr[8] = 8;  // bit depth
-    ihdr[9] = 6;  // color type: RGBA
-    ihdr[10] = 0; // compression
-    ihdr[11] = 0; // filter
-    ihdr[12] = 0; // interlace
-    png_write_chunk(f, "IHDR", ihdr, 13);
-
-    // IDAT
-    png_write_chunk(f, "IDAT", compressed.data(), (uint32_t)compressed.size());
-
-    // IEND
-    png_write_chunk(f, "IEND", nullptr, 0);
-
-    fclose(f);
+    if (!hfsbrowse::icon::write_png(out_path, rgba)) return false;
 
     status_text_ = "Saved icon: " + out_path;
-    fprintf(stderr, "hfsbrowser: saved icon PNG: %s\n", out_path.c_str());
     return true;
 }
 
@@ -3421,113 +2876,13 @@ bool App::delete_recursive(const std::string& hfs_path, bool is_dir) {
 void App::delete_selected() {}
 void App::mkdir_selected() {}
 
-// --- MacRoman <-> UTF-8 conversion ---
+// --- Encoding: delegate to libhfsbrowse ---
+// Thin wrappers for backward compat with App:: method signatures
 
-// MacRoman high bytes (0x80-0xFF) to Unicode code points
-static const uint16_t macroman_to_unicode[128] = {
-    0x00C4, 0x00C5, 0x00C7, 0x00C9, 0x00D1, 0x00D6, 0x00DC, 0x00E1,
-    0x00E0, 0x00E2, 0x00E4, 0x00E3, 0x00E5, 0x00E7, 0x00E9, 0x00E8,
-    0x00EA, 0x00EB, 0x00ED, 0x00EC, 0x00EE, 0x00EF, 0x00F1, 0x00F3,
-    0x00F2, 0x00F4, 0x00F6, 0x00F5, 0x00FA, 0x00F9, 0x00FB, 0x00FC,
-    0x2020, 0x00B0, 0x00A2, 0x00A3, 0x00A7, 0x2022, 0x00B6, 0x00DF,
-    0x00AE, 0x00A9, 0x2122, 0x00B4, 0x00A8, 0x2260, 0x00C6, 0x00D8,
-    0x221E, 0x00B1, 0x2264, 0x2265, 0x00A5, 0x00B5, 0x2202, 0x2211,
-    0x220F, 0x03C0, 0x222B, 0x00AA, 0x00BA, 0x03A9, 0x00E6, 0x00F8,
-    0x00BF, 0x00A1, 0x00AC, 0x221A, 0x0192, 0x2248, 0x2206, 0x00AB,
-    0x00BB, 0x2026, 0x00A0, 0x00C0, 0x00C3, 0x00D5, 0x0152, 0x0153,
-    0x2013, 0x2014, 0x201C, 0x201D, 0x2018, 0x2019, 0x00F7, 0x25CA,
-    0x00FF, 0x0178, 0x2044, 0x20AC, 0x2039, 0x203A, 0xFB01, 0xFB02,
-    0x2021, 0x00B7, 0x201A, 0x201E, 0x2030, 0x00C2, 0x00CA, 0x00C1,
-    0x00CB, 0x00C8, 0x00CD, 0x00CE, 0x00CF, 0x00CC, 0x00D3, 0x00D4,
-    0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
-    0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
-};
-
-std::string App::macroman_to_utf8(const std::string& macroman) {
-    std::string result;
-    result.reserve(macroman.size() * 2);
-    for (unsigned char c : macroman) {
-        if (c < 0x80) {
-            result += (char)c;
-        } else {
-            uint16_t u = macroman_to_unicode[c - 0x80];
-            if (u < 0x80) {
-                result += (char)u;
-            } else if (u < 0x800) {
-                result += (char)(0xC0 | (u >> 6));
-                result += (char)(0x80 | (u & 0x3F));
-            } else {
-                result += (char)(0xE0 | (u >> 12));
-                result += (char)(0x80 | ((u >> 6) & 0x3F));
-                result += (char)(0x80 | (u & 0x3F));
-            }
-        }
-    }
-    return result;
-}
-
-std::string App::utf8_to_macroman(const std::string& utf8) {
-    std::string result;
-    result.reserve(utf8.size());
-    size_t i = 0;
-    while (i < utf8.size()) {
-        unsigned char c = utf8[i];
-        uint32_t cp = 0;
-        if (c < 0x80) {
-            cp = c;
-            i++;
-        } else if ((c & 0xE0) == 0xC0) {
-            cp = (c & 0x1F) << 6;
-            if (i + 1 < utf8.size()) cp |= (utf8[i+1] & 0x3F);
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            cp = (c & 0x0F) << 12;
-            if (i + 1 < utf8.size()) cp |= (utf8[i+1] & 0x3F) << 6;
-            if (i + 2 < utf8.size()) cp |= (utf8[i+2] & 0x3F);
-            i += 3;
-        } else {
-            i++; // skip 4-byte sequences
-            result += '?';
-            continue;
-        }
-
-        if (cp < 0x80) {
-            result += (char)cp;
-        } else {
-            // Search MacRoman table
-            bool found = false;
-            for (int j = 0; j < 128; j++) {
-                if (macroman_to_unicode[j] == cp) {
-                    result += (char)(0x80 + j);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) result += '_'; // Unmappable character
-        }
-    }
-    return result;
-}
-
-std::string App::sanitize_hfs_name(const std::string& name) {
-    std::string mr = utf8_to_macroman(name);
-    // HFS max filename: 31 chars
-    if (mr.length() > 31) mr.resize(31);
-    // Replace ':' (HFS path separator) with '-'
-    for (char& c : mr)
-        if (c == ':') c = '-';
-    return mr;
-}
-
-std::string App::sanitize_hfsplus_name(const std::string& name) {
-    // HFS+ max filename: 255 UTF-16 code units — we limit to 255 bytes of UTF-8
-    std::string result = name;
-    if (result.length() > 255) result.resize(255);
-    // Replace ':' (path separator in our Mac-style paths) with '-'
-    for (char& c : result)
-        if (c == ':') c = '-';
-    return result;
-}
+std::string App::macroman_to_utf8(const std::string& s) { return hfsbrowse::macroman_to_utf8(s); }
+std::string App::utf8_to_macroman(const std::string& s) { return hfsbrowse::utf8_to_macroman(s); }
+std::string App::sanitize_hfs_name(const std::string& s) { return hfsbrowse::sanitize_hfs_name(s); }
+std::string App::sanitize_hfsplus_name(const std::string& s) { return hfsbrowse::sanitize_hfsplus_name(s); }
 
 std::string App::format_size(unsigned long bytes) {
     char buf[32];
