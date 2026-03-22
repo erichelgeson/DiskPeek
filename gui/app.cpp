@@ -865,7 +865,7 @@ void App::render_file_list() {
 
         float icon_sz = ImGui::GetTextLineHeight();
 
-        ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, icon_sz + 16);
+        ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, icon_sz + 4);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
         ImGui::TableSetupColumn("Type/Creator", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("DF/RF Size", ImGuiTableColumnFlags_WidthFixed, 120.0f);
