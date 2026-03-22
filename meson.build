@@ -148,6 +148,22 @@ binhex_lib = static_library('binhex',
   c_args : binhex_c_args,
 )
 
+# libhfsbrowse — UI-independent library for HFS/HFS+ volume operations
+hfsbrowse_inc = include_directories('lib/hfsbrowse')
+
+hfsbrowse_lib = static_library('hfsbrowse',
+  files(
+    'lib/hfsbrowse/encoding.cpp',
+    'lib/hfsbrowse/faf.cpp',
+    'lib/hfsbrowse/icon.cpp',
+    'lib/hfsbrowse/appledouble.cpp',
+    'lib/hfsbrowse/volume.cpp',
+  ),
+  include_directories : [hfsbrowse_inc, libhfs_inc, libdmg_hfsplus_inc, include_directories('gui')],
+  dependencies : zlib_dep,
+  link_with : [libhfs, libdmg_hfsplus],
+)
+
 gui_sources = files(
   'gui/main_gui.cpp',
   'gui/app.cpp',
@@ -156,9 +172,9 @@ gui_sources = files(
 
 executable('hfsbrowser',
   gui_sources + imgui_sources,
-  include_directories : [libhfs_inc, libdmg_hfsplus_inc, imgui_inc, include_directories('gui'), include_directories('.')],
+  include_directories : [libhfs_inc, libdmg_hfsplus_inc, hfsbrowse_inc, imgui_inc, include_directories('gui'), include_directories('.')],
   dependencies : [sdl2_dep, gl_dep, thread_dep, zlib_dep],
-  link_with : [libhfs, libdmg_hfsplus, binhex_lib],
+  link_with : [libhfs, libdmg_hfsplus, binhex_lib, hfsbrowse_lib],
   link_args : gui_link_args,
   install : true,
 )
