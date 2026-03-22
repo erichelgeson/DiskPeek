@@ -428,7 +428,11 @@ void extractAllInFolder(HFSCatalogNodeID folderID, Volume* volume) {
 			folder = (HFSPlusCatalogFolder*)list->record;
 			printf("folder: %s\n", name);
 			if(stat(name, &status) != 0) {
+	#ifdef _WIN32
+				ASSERT(_mkdir(name) == 0, "mkdir");
+#else
 				ASSERT(mkdir(name, 0755) == 0, "mkdir");
+#endif
 			}
 			ASSERT(chdir(name) == 0, "chdir");
 			extractAllInFolder(folder->folderID, volume);

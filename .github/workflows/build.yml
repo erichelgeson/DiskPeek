@@ -33,7 +33,7 @@ jobs:
           cp builddir/hfsbrowser "$APPDIR/usr/bin/"
           cp lib/fonts/ChicagoFLF.ttf "$APPDIR/usr/bin/lib/fonts/"
           cp packaging/diskpeek.desktop "$APPDIR/usr/share/applications/"
-          cp DogCow_from_LaserWriter_8.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/diskpeek.png"
+          cp packaging/diskpeek-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/diskpeek.png"
 
           nix develop -c bash -c "/tmp/linuxdeploy --appimage-extract-and-run \
             --appdir '$APPDIR' \
