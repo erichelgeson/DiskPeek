@@ -56,6 +56,10 @@ public:
     virtual int delete_file(const std::string& mac_path) = 0;
     virtual int rename(const std::string& old_path, const std::string& new_path) = 0;
 
+    // Force-delete: removes catalog entry without freeing extents.
+    // Use when normal delete fails due to corrupt extents.
+    virtual int force_delete(const std::string& mac_path) = 0;
+
     // HFS-specific: change current directory for relative path operations
     virtual int chdir(const std::string& mac_path) = 0;
 

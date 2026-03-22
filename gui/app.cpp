@@ -1181,12 +1181,27 @@ void App::render_confirm_popup() {
                 status_text_ = "Deleted: " + confirm_target_;
                 refresh_listing();
             } else {
-                set_error("Delete failed: " + confirm_target_);
+                set_error("Delete failed (try Force Delete for corrupt files): " + confirm_target_);
             }
             show_confirm_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
+        if (!confirm_is_dir_ && vol_) {
+            if (ImGui::Button("Force Delete", ImVec2(120, 0))) {
+                if (vol_->force_delete(confirm_target_) == 0) {
+                    status_text_ = "Force deleted: " + confirm_target_ + " (disk blocks not freed)";
+                    refresh_listing();
+                } else {
+                    set_error("Force delete also failed: " + confirm_target_);
+                }
+                show_confirm_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Remove catalog entry without freeing disk blocks.\nUse for files with corrupt extents.");
+            ImGui::SameLine();
+        }
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             show_confirm_ = false;
             ImGui::CloseCurrentPopup();

@@ -132,6 +132,7 @@ public:
     int rename(const std::string& old_p, const std::string& new_p) override {
         return hfs_rename(vol_, old_p.c_str(), new_p.c_str());
     }
+    int force_delete(const std::string& path) override { return delete_file(path); } // HFS doesn't need force
     int chdir(const std::string& path) override { return hfs_chdir(vol_, path.c_str()); }
 
     int set_type_creator(const std::string& path, const char* t, const char* c) override {
@@ -323,6 +324,9 @@ public:
     int delete_file(const std::string& path) override { return hfsplus_delete(vol_, path.c_str()); }
     int rename(const std::string& old_p, const std::string& new_p) override {
         return hfsplus_rename(vol_, old_p.c_str(), new_p.c_str());
+    }
+    int force_delete(const std::string& path) override {
+        return hfsplus_force_delete(vol_, path.c_str());
     }
     int chdir(const std::string&) override { return 0; } // no-op for HFS+
 

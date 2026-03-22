@@ -694,6 +694,77 @@ int hfsplus_write_rsrc_fork(HFSPlusVolume* vol, const char* path,
     return ok ? 0 : -1;
 }
 
+int hfsplus_force_delete(HFSPlusVolume* vol, const char* path) {
+    if (!vol || !vol->volume || vol->readonly) return -1;
+
+    std::string unix_path = mac_to_unix_path(path, vol->vol_name);
+
+    PANIC_PROTECT_BEGIN()
+        return -1;
+    PANIC_PROTECT_END()
+
+    // Find the record and its catalog key
+    HFSPlusCatalogKey key;
+    HFSPlusCatalogRecord* record = getRecordFromPath3(
+        unix_path.c_str(), vol->volume, NULL, &key, TRUE, FALSE, kHFSRootFolderID);
+    s_panic_armed = false;
+
+    if (!record) return -1;
+
+    // Get the parent folder to decrement its valence
+    PANIC_PROTECT_BEGIN()
+        free(record);
+        return -1;
+    PANIC_PROTECT_END()
+
+    HFSPlusCatalogFolder* parentFolder =
+        (HFSPlusCatalogFolder*)getRecordByCNID(key.parentID, vol->volume);
+    s_panic_armed = false;
+
+    // Remove the catalog entry (without touching extents)
+    PANIC_PROTECT_BEGIN()
+        free(record);
+        free(parentFolder);
+        return -1;
+    PANIC_PROTECT_END()
+
+    removeFromBTree(vol->volume->catalogTree, (BTKey*)(&key));
+
+    // Remove the thread record
+    HFSPlusCatalogKey threadKey;
+    threadKey.nodeName.length = 0;
+    if (record->recordType == kHFSPlusFileRecord)
+        threadKey.parentID = ((HFSPlusCatalogFile*)record)->fileID;
+    else if (record->recordType == kHFSPlusFolderRecord)
+        threadKey.parentID = ((HFSPlusCatalogFolder*)record)->folderID;
+    else
+        threadKey.parentID = 0;
+    threadKey.keyLength = sizeof(threadKey.parentID) + sizeof(threadKey.nodeName.length);
+
+    if (threadKey.parentID != 0)
+        removeFromBTree(vol->volume->catalogTree, (BTKey*)(&threadKey));
+
+    // Update parent folder valence
+    if (parentFolder && parentFolder->recordType == kHFSPlusFolderRecord) {
+        if (record->recordType == kHFSPlusFileRecord)
+            vol->volume->volumeHeader->fileCount--;
+        else
+            vol->volume->volumeHeader->folderCount--;
+        parentFolder->valence--;
+        updateCatalog(vol->volume, (HFSPlusCatalogRecord*)parentFolder);
+    }
+
+    updateVolume(vol->volume);
+    s_panic_armed = false;
+
+    free(record);
+    free(parentFolder);
+
+    fprintf(stderr, "hfsplus_force_delete: removed catalog entry for %s (extents NOT freed)\n",
+            unix_path.c_str());
+    return 0;
+}
+
 int hfsplus_delete(HFSPlusVolume* vol, const char* path) {
     if (!vol || !vol->volume || vol->readonly) return -1;
 
