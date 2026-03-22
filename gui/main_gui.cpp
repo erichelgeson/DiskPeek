@@ -140,11 +140,41 @@ int main(int, char**) {
 
     style.ScaleAllSizes(scale);
 
-    // Load Chicago font (classic Mac), fall back to default if missing
-    ImFont* font = io.Fonts->AddFontFromFileTTF("lib/fonts/ChicagoFLF.ttf", 14.0f * scale);
+    // Load Chicago font with extended glyph ranges for MacRoman characters
+    // Default ImGui range is U+0020-U+00FF; MacRoman needs additional glyphs
+    // like ƒ (U+0192), curly quotes, ellipsis, em dash, etc.
+    static const ImWchar mac_glyph_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement
+        0x0131, 0x0131, // ı (dotless i)
+        0x0152, 0x0153, // Œ œ
+        0x0178, 0x0178, // Ÿ
+        0x0192, 0x0192, // ƒ (folder symbol)
+        0x02C6, 0x02DD, // modifier letters (ˆ ˜ ¯ ˘ ˙ ˚ ¸ ˝ ˛ ˇ)
+        0x2013, 0x2026, // – — ' ' " " † ‡ • …
+        0x2030, 0x2030, // ‰
+        0x2039, 0x203A, // ‹ ›
+        0x2044, 0x2044, // ⁄
+        0x20AC, 0x20AC, // €
+        0x2122, 0x2122, // ™
+        0x2202, 0x2202, // ∂
+        0x2206, 0x2206, // ∆
+        0x220F, 0x220F, // ∏
+        0x2211, 0x2211, // ∑
+        0x221A, 0x221A, // √
+        0x221E, 0x221E, // ∞
+        0x222B, 0x222B, // ∫
+        0x2248, 0x2248, // ≈
+        0x2260, 0x2260, // ≠
+        0x2264, 0x2265, // ≤ ≥
+        0x25CA, 0x25CA, // ◊
+        0xFB01, 0xFB02, // fi fl ligatures
+        0,
+    };
+
+    ImFont* font = io.Fonts->AddFontFromFileTTF("lib/fonts/ChicagoFLF.ttf", 14.0f * scale, nullptr, mac_glyph_ranges);
     if (!font)
         io.Fonts->AddFontDefault();
-    io.FontGlobalScale = 1.0f;  // font already scaled by size parameter
+    io.FontGlobalScale = 1.0f;
 
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 330");
