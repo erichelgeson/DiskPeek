@@ -1552,11 +1552,16 @@ void App::render_check_popup() {
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_Appearing);
 
     if (ImGui::BeginPopupModal("Volume Check", nullptr, ImGuiWindowFlags_None)) {
-        ImGui::BeginChild("##checklog", ImVec2(0, -30), true);
-        ImGui::TextUnformatted(check_log_.c_str());
-        ImGui::EndChild();
+        ImGui::InputTextMultiline("##checklog", (char*)check_log_.c_str(),
+            check_log_.size() + 1, ImVec2(-1, -30),
+            ImGuiInputTextFlags_ReadOnly);
 
-        if (ImGui::Button("OK", ImVec2(120, 0))) {
+        if (ImGui::Button("Copy", ImVec2(80, 0))) {
+            SDL_SetClipboardText(check_log_.c_str());
+            status_text_ = "Check log copied to clipboard";
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("OK", ImVec2(80, 0))) {
             show_check_ = false;
             ImGui::CloseCurrentPopup();
         }
