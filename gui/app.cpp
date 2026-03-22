@@ -2001,39 +2001,36 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
         }
         fclose(in);
 
+        // Detect type/creator: try xattr FinderInfo, then magic bytes, then FAF extension
+        TypeCreatorResult tcr;
+        const char* type = "????";
+        const char* creator = "????";
+
+        uint8_t fi_buf[32];
+        bool got_xattr = false;
+        if (platform_getxattr(host_path.c_str(), "com.apple.FinderInfo", fi_buf, 32) >= 32) {
+            memcpy(tcr.type, fi_buf, 4); tcr.type[4] = '\0';
+            memcpy(tcr.creator, fi_buf + 4, 4); tcr.creator[4] = '\0';
+            if (tcr.type[0] && strcmp(tcr.type, "????") != 0) {
+                type = tcr.type;
+                creator = tcr.creator;
+                got_xattr = true;
+            }
+        }
+        if (!got_xattr) {
+            if (file_size > 0) {
+                size_t check = (size_t)file_size > 1024 ? 1024 : (size_t)file_size;
+                if (!detect_type_creator_magic(data.data(), check, &tcr))
+                    detect_type_creator_ext(filename.c_str(), &tcr);
+                type = tcr.type;
+                creator = tcr.creator;
+            } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
+                type = tcr.type;
+                creator = tcr.creator;
+            }
+        }
+
         if (vol_type_ == VolumeType::HFS) {
-            // Detect type/creator: try xattr FinderInfo, then magic bytes, then FAF extension
-            TypeCreatorResult tcr;
-            const char* type = "????";
-            const char* creator = "????";
-
-            // Try reading FinderInfo xattr from host file
-            uint8_t fi_buf[32];
-            bool got_xattr = false;
-            if (platform_getxattr(host_path.c_str(), "com.apple.FinderInfo", fi_buf, 32) >= 32) {
-                memcpy(tcr.type, fi_buf, 4); tcr.type[4] = '\0';
-                memcpy(tcr.creator, fi_buf + 4, 4); tcr.creator[4] = '\0';
-                if (tcr.type[0] && strcmp(tcr.type, "????") != 0) {
-                    type = tcr.type;
-                    creator = tcr.creator;
-                    got_xattr = true;
-                }
-            }
-
-            if (!got_xattr) {
-                if (file_size > 0) {
-                    size_t check = (size_t)file_size > 1024 ? 1024 : (size_t)file_size;
-                    if (!detect_type_creator_magic(data.data(), check, &tcr)) {
-                        detect_type_creator_ext(filename.c_str(), &tcr);
-                    }
-                    type = tcr.type;
-                    creator = tcr.creator;
-                } else if (detect_type_creator_ext(filename.c_str(), &tcr)) {
-                    type = tcr.type;
-                    creator = tcr.creator;
-                }
-            }
-
             if (vol_->create_file(hfs_path, type, creator, data.data(), data.size()) != 0) {
                 set_error("Failed to create HFS file");
                 show_progress_ = false;
@@ -2053,6 +2050,9 @@ void App::copy_to_hfs_impl(const std::string& host_path) {
                 show_progress_ = false;
                 return;
             }
+            // Set type/creator on HFS+ (write_file doesn't do it)
+            if (strcmp(type, "????") != 0)
+                vol_->set_type_creator(hfs_path, type, creator);
         }
 
         status_text_ = "Imported: " + filename + " (" + format_size((unsigned long)file_size) + ")";
