@@ -61,12 +61,24 @@ int main(int, char**) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     // Scale UI based on display DPI
-    float dpi = 0;
     float scale = 1.0f;
-    if (SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), &dpi, nullptr, nullptr) == 0 && dpi > 0) {
-        scale = dpi / 96.0f;
-        if (scale < 1.0f) scale = 1.0f;
+#if SDL_VERSION_ATLEAST(2, 26, 0)
+    // SDL 2.26+ deprecated SDL_GetDisplayDPI; use window pixel size ratio
+    {
+        int ww, wh, dw, dh;
+        SDL_GetWindowSize(window, &ww, &wh);
+        SDL_GL_GetDrawableSize(window, &dw, &dh);
+        if (ww > 0 && dw > 0)
+            scale = (float)dw / (float)ww;
     }
+#else
+    {
+        float dpi = 0;
+        if (SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(window), &dpi, nullptr, nullptr) == 0 && dpi > 0)
+            scale = dpi / 96.0f;
+    }
+#endif
+    if (scale < 1.0f) scale = 1.0f;
 
     // Classic Mac OS 6/7 inspired theme
     ImGuiStyle& style = ImGui::GetStyle();

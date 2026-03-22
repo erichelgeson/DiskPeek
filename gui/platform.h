@@ -14,6 +14,8 @@
 #  include <io.h>
 #  include <direct.h>
 #  define platform_mkdir(path) _mkdir(path)
+#  define strcasecmp _stricmp
+#  define fileno _fileno
 #else
 #  include <sys/stat.h>
 #  include <sys/statvfs.h>

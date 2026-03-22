@@ -254,7 +254,8 @@ void hfsplus_close(HFSPlusVolume* vol) {
     if (vol->volume) {
         if (!vol->readonly) {
             PANIC_PROTECT_BEGIN()
-                // Ignore panic during volume update
+                s_panic_armed = false;
+                // Ignore panic during volume update — just skip it
                 goto skip_update;
             PANIC_PROTECT_END()
             updateVolume(vol->volume);
@@ -458,6 +459,11 @@ int hfsplus_read_file(HFSPlusVolume* vol, const char* path,
         return 0;
     }
 
+    if (logical_size > (uint64_t)512 * 1024 * 1024) {
+        free(rec);
+        return -1;
+    }
+
     PANIC_PROTECT_BEGIN()
         free(rec);
         return -1;
@@ -553,6 +559,14 @@ int hfsplus_read_file_by_cnid(HFSPlusVolume* vol, uint32_t cnid, uint32_t parent
         return 0;
     }
 
+    // Sanity check: reject absurdly large sizes (corrupted volume)
+    if (logical_size > (uint64_t)512 * 1024 * 1024) {
+        fprintf(stderr, "hfsplus_read_file: refusing to read %llu bytes (likely corruption)\n",
+                (unsigned long long)logical_size);
+        free(rec);
+        return -1;
+    }
+
     PANIC_PROTECT_BEGIN()
         free(rec);
         return -1;
@@ -615,15 +629,15 @@ int hfsplus_write_file(HFSPlusVolume* vol, const char* path,
     }
 
     PANIC_PROTECT_BEGIN()
-        free(buf);
+        // inFile owns buf; if panic happens before add_hfs, close inFile to free buf
+        inFile->close(inFile);
         return -1;
     PANIC_PROTECT_END()
 
     int ret = add_hfs(vol->volume, inFile, unix_path.c_str());
     s_panic_armed = false;
 
-    // add_hfs closes inFile
-    free(buf);
+    // add_hfs calls inFile->close which frees buf — do NOT free(buf) here
 
     return ret ? 0 : -1;
 }

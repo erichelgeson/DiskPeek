@@ -70,6 +70,7 @@ private:
     void render_rename_popup();
     void render_check_popup();
     void render_about_popup();
+    void run_volume_check();
     bool show_about_ = false;
     void render_progress_bar();
 
@@ -182,7 +183,7 @@ private:
     bool confirm_is_dir_ = false;
 
     bool show_mkdir_ = false;
-    char mkdir_name_[32] = {};
+    char mkdir_name_[256] = {};
 
     bool show_rename_ = false;
     char rename_buf_[256] = {};

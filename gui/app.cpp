@@ -536,6 +536,22 @@ void App::draw_file_icon(ImVec2 pos, float size) {
         outline, 1.0f);
 }
 
+// --- Helpers ---
+
+static HFSEntry hfsentry_from_plus(const HFSPlusDirEntry& pe) {
+    HFSEntry e;
+    e.name = pe.name;
+    e.is_dir = pe.is_dir;
+    e.cnid = pe.cnid;
+    e.parent_cnid = pe.parent_cnid;
+    e.fdflags = pe.finder_flags;
+    e.size = (unsigned long)pe.data_size;
+    e.rsize = (unsigned long)pe.rsrc_size;
+    memcpy(e.type, pe.type, 5);
+    memcpy(e.creator, pe.creator, 5);
+    return e;
+}
+
 // --- App lifecycle ---
 
 App::App() {}
@@ -910,16 +926,7 @@ void App::refresh_listing() {
         }
 
         for (int i = 0; i < plus_count; i++) {
-            HFSEntry e;
-            e.name = plus_entries[i].name;
-            e.is_dir = plus_entries[i].is_dir;
-            e.cnid = plus_entries[i].cnid;
-            e.parent_cnid = plus_entries[i].parent_cnid;
-            e.fdflags = plus_entries[i].finder_flags;
-            e.size = (unsigned long)plus_entries[i].data_size;
-            e.rsize = (unsigned long)plus_entries[i].rsrc_size;
-            memcpy(e.type, plus_entries[i].type, 5);
-            memcpy(e.creator, plus_entries[i].creator, 5);
+            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
             if (!show_hidden_ && (e.fdflags & 0x4000))
                 continue;
             entries_.push_back(e);
@@ -1185,96 +1192,7 @@ void App::render_toolbar() {
     if (has_volume()) {
         ImGui::SameLine();
         if (ImGui::Button("Check")) {
-            check_log_.clear();
-            // Run volume check
-            if (vol_type_ == VolumeType::HFS) {
-                check_log_ += "=== HFS Volume Check ===\n";
-                hfsvolent vstat;
-                if (hfs_vstat(vol_, &vstat) == 0) {
-                    check_log_ += "Volume: " + std::string(vstat.name) + "\n";
-                    check_log_ += "Total: " + format_size(vstat.totbytes) + "\n";
-                    check_log_ += "Free: " + format_size(vstat.freebytes) + "\n";
-                    check_log_ += "Files: " + std::to_string(vstat.numfiles) + "\n";
-                    check_log_ += "Dirs: " + std::to_string(vstat.numdirs) + "\n";
-                    if (vstat.blessed)
-                        check_log_ += "Blessed folder: CNID " + std::to_string(vstat.blessed) + "\n";
-                    check_log_ += "\n";
-
-                    // Check catalog by walking all directories
-                    check_log_ += "Checking catalog tree...\n";
-                    int file_count = 0, dir_count = 0, errors = 0;
-                    std::function<void(const std::string&)> walk;
-                    walk = [&](const std::string& path) {
-                        hfsdir* dir = hfs_opendir(vol_, path.c_str());
-                        if (!dir) { errors++; check_log_ += "  ERROR: cannot open " + path + "\n"; return; }
-                        hfsdirent ent;
-                        while (hfs_readdir(dir, &ent) == 0) {
-                            if (ent.flags & HFS_ISDIR) {
-                                dir_count++;
-                                walk(path + ent.name + ":");
-                            } else {
-                                file_count++;
-                            }
-                        }
-                        hfs_closedir(dir);
-                    };
-                    walk(std::string(vstat.name) + ":");
-
-                    check_log_ += "  Found " + std::to_string(file_count) + " files, "
-                                + std::to_string(dir_count) + " directories\n";
-                    if ((unsigned long)file_count != vstat.numfiles)
-                        check_log_ += "  WARNING: file count mismatch (MDB says " + std::to_string(vstat.numfiles) + ")\n";
-                    if ((unsigned long)dir_count != vstat.numdirs)
-                        check_log_ += "  WARNING: directory count mismatch (MDB says " + std::to_string(vstat.numdirs) + ")\n";
-
-                    if (errors == 0)
-                        check_log_ += "\nVolume appears OK.\n";
-                    else
-                        check_log_ += "\n" + std::to_string(errors) + " error(s) found.\n";
-                } else {
-                    check_log_ += "ERROR: Cannot read volume info\n";
-                }
-            } else if (vol_type_ == VolumeType::HFSPLUS) {
-                check_log_ += "=== HFS+ Volume Check ===\n";
-                check_log_ += "Volume: " + volume_name_ + "\n";
-                check_log_ += "Total: " + format_size(vol_total_bytes_) + "\n";
-                check_log_ += "Free: " + format_size(vol_free_bytes_) + "\n";
-                if (blessed_cnid_)
-                    check_log_ += "Blessed folder: CNID " + std::to_string(blessed_cnid_) + "\n";
-                check_log_ += "\n";
-
-                // Walk all directories via CNID
-                check_log_ += "Checking catalog tree...\n";
-                int file_count = 0, dir_count = 0, errors = 0;
-                std::function<void(uint32_t)> walk;
-                walk = [&](uint32_t folder_cnid) {
-                    HFSPlusDirEntry* ents = nullptr;
-                    int cnt = 0;
-                    if (hfsplus_list_dir_by_cnid(hfsplus_vol_, folder_cnid, &ents, &cnt) != 0) {
-                        errors++;
-                        check_log_ += "  ERROR: cannot list folder CNID " + std::to_string(folder_cnid) + "\n";
-                        return;
-                    }
-                    for (int j = 0; j < cnt; j++) {
-                        if (ents[j].is_dir) {
-                            dir_count++;
-                            walk(ents[j].cnid);
-                        } else {
-                            file_count++;
-                        }
-                    }
-                    hfsplus_free_entries(ents);
-                };
-                walk(2); // kHFSRootFolderID
-
-                check_log_ += "  Found " + std::to_string(file_count) + " files, "
-                            + std::to_string(dir_count) + " directories\n";
-
-                if (errors == 0)
-                    check_log_ += "\nVolume appears OK.\n";
-                else
-                    check_log_ += "\n" + std::to_string(errors) + " error(s) found.\n";
-            }
+            run_volume_check();
             show_check_ = true;
         }
 
@@ -1335,7 +1253,11 @@ void App::render_path_bar() {
             if (ImGui::SmallButton(btn_id)) {
                 // Navigate to this path
                 if (vol_type_ == VolumeType::HFS) {
-                    hfs_chdir(vol_, target.c_str());
+                    if (hfs_chdir(vol_, target.c_str()) == -1) {
+                        set_error(std::string("Navigation failed: ") + (hfs_error ? hfs_error : "unknown"));
+                        ImGui::PopStyleColor();
+                        return;
+                    }
                 } else if (vol_type_ == VolumeType::HFSPLUS) {
                     // Rebuild CNID stack by navigating from root
                     cnid_stack_.clear();
@@ -1449,7 +1371,7 @@ void App::render_file_list() {
 
             // Selectable name — show blessed indicator for system folder
             bool is_blessed = (e.is_dir && blessed_cnid_ != 0 && e.cnid == blessed_cnid_);
-            char sel_id[80];
+            char sel_id[300];
             if (is_blessed)
                 snprintf(sel_id, sizeof(sel_id), "%s (blessed)##%d", e.name.c_str(), i);
             else
@@ -1467,7 +1389,7 @@ void App::render_file_list() {
             if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
                 selected_entry_ = i;
             }
-            char ctx_id[64];
+            char ctx_id[32];
             snprintf(ctx_id, sizeof(ctx_id), "ctx##%d", i);
             if (selected_entry_ == i && ImGui::BeginPopupContextItem(ctx_id)) {
                 std::string ctx_hfs_path = current_path_ + e.name;
@@ -1837,7 +1759,8 @@ void App::render_mkdir_popup() {
             ImGuiInputTextFlags_EnterReturnsTrue);
 
         if (enter || ImGui::Button("Create", ImVec2(100, 0))) {
-            if (strlen(mkdir_name_) > 0 && strlen(mkdir_name_) <= HFS_MAX_FLEN) {
+            size_t max_len = (vol_type_ == VolumeType::HFSPLUS) ? 255 : HFS_MAX_FLEN;
+            if (strlen(mkdir_name_) > 0 && strlen(mkdir_name_) <= max_len) {
                 std::string full_path = current_path_ + mkdir_name_;
                 int rc = -1;
                 if (vol_type_ == VolumeType::HFS) {
@@ -1944,16 +1867,17 @@ void App::render_rename_popup() {
             return;
         }
 
-        HFSEntry& e = entries_[selected_entry_];
-        ImGui::Text("Rename: %s", e.name.c_str());
+        // Copy name before any operation that might invalidate entries_
+        std::string entry_name = entries_[selected_entry_].name;
+        ImGui::Text("Rename: %s", entry_name.c_str());
         ImGui::Text("New name:");
         bool enter = ImGui::InputText("##rename", rename_buf_, sizeof(rename_buf_),
             ImGuiInputTextFlags_EnterReturnsTrue);
 
         if (enter || ImGui::Button("Rename", ImVec2(100, 0))) {
             std::string new_name = rename_buf_;
-            if (!new_name.empty() && new_name != e.name) {
-                std::string old_path = current_path_ + e.name;
+            if (!new_name.empty() && new_name != entry_name) {
+                std::string old_path = current_path_ + entry_name;
                 std::string new_path = current_path_ + new_name;
                 int rc = -1;
 
@@ -1968,7 +1892,7 @@ void App::render_rename_popup() {
                 }
 
                 if (rc == 0) {
-                    status_text_ = "Renamed: " + e.name + " → " + new_name;
+                    status_text_ = "Renamed: " + entry_name + " → " + new_name;
                     refresh_listing();
                 }
             }
@@ -2124,6 +2048,80 @@ void App::render_info_popup() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
+    }
+}
+
+void App::run_volume_check() {
+    check_log_.clear();
+
+    if (vol_type_ == VolumeType::HFS) {
+        check_log_ += "=== HFS Volume Check ===\n";
+        hfsvolent vstat;
+        if (hfs_vstat(vol_, &vstat) == 0) {
+            check_log_ += "Volume: " + std::string(vstat.name) + "\n";
+            check_log_ += "Total: " + format_size(vstat.totbytes) + "\n";
+            check_log_ += "Free: " + format_size(vstat.freebytes) + "\n";
+            check_log_ += "Files: " + std::to_string(vstat.numfiles) + "\n";
+            check_log_ += "Dirs: " + std::to_string(vstat.numdirs) + "\n";
+            if (vstat.blessed)
+                check_log_ += "Blessed folder: CNID " + std::to_string(vstat.blessed) + "\n";
+            check_log_ += "\n";
+
+            check_log_ += "Checking catalog tree...\n";
+            int file_count = 0, dir_count = 0, errors = 0;
+            std::function<void(const std::string&)> walk;
+            walk = [&](const std::string& path) {
+                hfsdir* dir = hfs_opendir(vol_, path.c_str());
+                if (!dir) { errors++; check_log_ += "  ERROR: cannot open " + path + "\n"; return; }
+                hfsdirent ent;
+                while (hfs_readdir(dir, &ent) == 0) {
+                    if (ent.flags & HFS_ISDIR) { dir_count++; walk(path + ent.name + ":"); }
+                    else { file_count++; }
+                }
+                hfs_closedir(dir);
+            };
+            walk(std::string(vstat.name) + ":");
+
+            check_log_ += "  Found " + std::to_string(file_count) + " files, "
+                        + std::to_string(dir_count) + " directories\n";
+            if ((unsigned long)file_count != vstat.numfiles)
+                check_log_ += "  WARNING: file count mismatch (MDB says " + std::to_string(vstat.numfiles) + ")\n";
+            if ((unsigned long)dir_count != vstat.numdirs)
+                check_log_ += "  WARNING: directory count mismatch (MDB says " + std::to_string(vstat.numdirs) + ")\n";
+            check_log_ += (errors == 0) ? "\nVolume appears OK.\n"
+                                        : "\n" + std::to_string(errors) + " error(s) found.\n";
+        } else {
+            check_log_ += "ERROR: Cannot read volume info\n";
+        }
+    } else if (vol_type_ == VolumeType::HFSPLUS) {
+        check_log_ += "=== HFS+ Volume Check ===\n";
+        check_log_ += "Volume: " + volume_name_ + "\n";
+        check_log_ += "Total: " + format_size(vol_total_bytes_) + "\n";
+        check_log_ += "Free: " + format_size(vol_free_bytes_) + "\n";
+        if (blessed_cnid_)
+            check_log_ += "Blessed folder: CNID " + std::to_string(blessed_cnid_) + "\n";
+        check_log_ += "\nChecking catalog tree...\n";
+        int file_count = 0, dir_count = 0, errors = 0;
+        std::function<void(uint32_t)> walk;
+        walk = [&](uint32_t folder_cnid) {
+            HFSPlusDirEntry* ents = nullptr;
+            int cnt = 0;
+            if (hfsplus_list_dir_by_cnid(hfsplus_vol_, folder_cnid, &ents, &cnt) != 0) {
+                errors++;
+                check_log_ += "  ERROR: cannot list folder CNID " + std::to_string(folder_cnid) + "\n";
+                return;
+            }
+            for (int j = 0; j < cnt; j++) {
+                if (ents[j].is_dir) { dir_count++; walk(ents[j].cnid); }
+                else { file_count++; }
+            }
+            hfsplus_free_entries(ents);
+        };
+        walk(2);
+        check_log_ += "  Found " + std::to_string(file_count) + " files, "
+                    + std::to_string(dir_count) + " directories\n";
+        check_log_ += (errors == 0) ? "\nVolume appears OK.\n"
+                                    : "\n" + std::to_string(errors) + " error(s) found.\n";
     }
 }
 
@@ -2681,16 +2679,7 @@ void App::export_folder(const std::string& hfs_dir_path, const std::string& host
         if (rc != 0) return;
 
         for (int i = 0; i < plus_count; i++) {
-            HFSEntry e;
-            e.name = plus_entries[i].name;
-            e.is_dir = plus_entries[i].is_dir;
-            e.cnid = plus_entries[i].cnid;
-            e.parent_cnid = plus_entries[i].parent_cnid;
-            e.fdflags = plus_entries[i].finder_flags;
-            e.size = (unsigned long)plus_entries[i].data_size;
-            e.rsize = (unsigned long)plus_entries[i].rsrc_size;
-            memcpy(e.type, plus_entries[i].type, 5);
-            memcpy(e.creator, plus_entries[i].creator, 5);
+            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
 
             std::string child_hfs = hfs_dir_path + e.name;
             if (e.is_dir)
@@ -2748,16 +2737,7 @@ void App::export_folder_binhex(const std::string& hfs_dir_path, const std::strin
         if (rc != 0) return;
 
         for (int i = 0; i < plus_count; i++) {
-            HFSEntry e;
-            e.name = plus_entries[i].name;
-            e.is_dir = plus_entries[i].is_dir;
-            e.cnid = plus_entries[i].cnid;
-            e.parent_cnid = plus_entries[i].parent_cnid;
-            e.fdflags = plus_entries[i].finder_flags;
-            e.size = (unsigned long)plus_entries[i].data_size;
-            e.rsize = (unsigned long)plus_entries[i].rsrc_size;
-            memcpy(e.type, plus_entries[i].type, 5);
-            memcpy(e.creator, plus_entries[i].creator, 5);
+            HFSEntry e = hfsentry_from_plus(plus_entries[i]);
 
             std::string child_hfs = hfs_dir_path + e.name;
             if (e.is_dir) {
@@ -2788,10 +2768,15 @@ void App::import_host_dir(const std::string& host_dir) {
 
     // Create folder on the image
     std::string hfs_folder = current_path_ + dirname;
+    int mkdir_rc = -1;
     if (vol_type_ == VolumeType::HFS)
-        hfs_mkdir(vol_, hfs_folder.c_str());
+        mkdir_rc = hfs_mkdir(vol_, hfs_folder.c_str());
     else if (vol_type_ == VolumeType::HFSPLUS)
-        hfsplus_mkdir(hfsplus_vol_, hfs_folder.c_str());
+        mkdir_rc = hfsplus_mkdir(hfsplus_vol_, hfs_folder.c_str());
+    if (mkdir_rc != 0) {
+        fprintf(stderr, "hfsbrowser: failed to create folder %s\n", hfs_folder.c_str());
+        return;
+    }
 
     // Save and change current path
     std::string saved_path = current_path_;
@@ -3089,16 +3074,18 @@ bool App::export_as_binhex(const std::string& out_path, const HFSEntry& entry,
         if (f) {
             char buf[8192];
             unsigned long n;
-            while ((n = hfs_read(f, buf, sizeof(buf))) > 0)
-                bh_insert(buf, (int)n);
+            while ((n = hfs_read(f, buf, sizeof(buf))) > 0 && n != (unsigned long)-1)
+                if (bh_insert(buf, (int)n) == -1) break;
             hfs_close(f);
         }
     } else if (vol_type_ == VolumeType::HFSPLUS) {
         uint8_t* data = nullptr;
         size_t size = 0;
         int rc = hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, &data, &size, 0);
-        if (rc == 0 && data && size > 0) {
+        if (rc == 0 && data && size > 0 && size <= (size_t)INT_MAX) {
             bh_insert(data, (int)size);
+            free(data);
+        } else {
             free(data);
         }
     }
@@ -3111,16 +3098,18 @@ bool App::export_as_binhex(const std::string& out_path, const HFSEntry& entry,
             hfs_setfork(f, 1);
             char buf[8192];
             unsigned long n;
-            while ((n = hfs_read(f, buf, sizeof(buf))) > 0)
-                bh_insert(buf, (int)n);
+            while ((n = hfs_read(f, buf, sizeof(buf))) > 0 && n != (unsigned long)-1)
+                if (bh_insert(buf, (int)n) == -1) break;
             hfs_close(f);
         }
     } else if (vol_type_ == VolumeType::HFSPLUS) {
         uint8_t* data = nullptr;
         size_t size = 0;
         int rc = hfsplus_read_file_by_cnid(hfsplus_vol_, (uint32_t)entry.cnid, (uint32_t)entry.parent_cnid, &data, &size, 1);
-        if (rc == 0 && data && size > 0) {
+        if (rc == 0 && data && size > 0 && size <= (size_t)INT_MAX) {
             bh_insert(data, (int)size);
+            free(data);
+        } else {
             free(data);
         }
     }
@@ -3198,10 +3187,12 @@ bool App::import_from_binhex(const std::string& host_path) {
     bh_close();
     fclose(inf);
 
-    // Truncate name for HFS
-    std::string hfs_name = name;
-    if (hfs_name.length() > HFS_MAX_FLEN)
-        hfs_name = hfs_name.substr(0, HFS_MAX_FLEN);
+    // Sanitize embedded filename to prevent path traversal
+    std::string hfs_name;
+    if (vol_type_ == VolumeType::HFS)
+        hfs_name = sanitize_hfs_name(name);
+    else
+        hfs_name = sanitize_hfsplus_name(name);
 
     std::string hfs_path = current_path_ + hfs_name;
 
