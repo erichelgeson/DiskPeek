@@ -666,6 +666,7 @@ void App::render_toolbar() {
         if (ImGui::Button("Check")) {
             run_volume_check();
             show_check_ = true;
+            refresh_listing();
         }
 
         ImGui::SameLine();
