@@ -1,5 +1,5 @@
 /*
- * HFS Browser - Application state and UI logic
+ * Disk Peek - Application state and UI logic
  */
 
 #ifndef APP_H
@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <ctime>
 #include <memory>
 
 #include "imgui.h"
@@ -32,6 +33,8 @@ struct HFSEntry {
     char type[5];             // file type (files only)
     char creator[5];          // file creator (files only)
     short fdflags;
+    time_t crdate = 0;
+    time_t mddate = 0;
     GLuint icon_tex = 0;      // OpenGL texture for custom icon (0 = none)
 };
 
@@ -57,6 +60,7 @@ public:
     void open_image(const char* path);
     void import_file(const char* path);
     bool has_volume() const { return vol_ != nullptr; }
+    const std::string& volume_name() const { return volume_name_; }
 
     // Set by native dialog callback (must be public for C callback)
     std::string dialog_result_;
@@ -76,8 +80,12 @@ private:
     void render_rename_popup();
     void render_check_popup();
     void render_about_popup();
+    void render_new_image_popup();
     void run_volume_check();
     bool show_about_ = false;
+    bool show_new_image_ = false;
+    char new_image_name_[256] = {};
+    int new_image_size_mb_ = 100;
     void render_progress_bar();
 
     // HFS operations
@@ -181,6 +189,9 @@ private:
     std::vector<unsigned long> cnid_stack_;  // HFS+ parent CNID stack for navigate_up
     std::vector<HFSEntry> entries_;
     int selected_entry_ = -1;
+    int sort_column_ = 1;  // default sort by name
+    bool sort_ascending_ = true;
+    char search_buf_[256] = {};
 
     // Popups
     bool show_error_ = false;
@@ -217,7 +228,8 @@ private:
 
     // Native file dialog state
     enum class DialogOp { NONE, OPEN_IMAGE, EXPORT_FILE, EXPORT_BINHEX,
-                          EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE };
+                          EXPORT_FOLDER_BINHEX, EXPORT_ICON, IMPORT_FILE,
+                          NEW_IMAGE };
     DialogOp pending_op_ = DialogOp::NONE;
 };
 

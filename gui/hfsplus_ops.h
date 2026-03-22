@@ -34,6 +34,8 @@ struct HFSPlusDirEntry {
     char type[5];
     char creator[5];
     uint16_t finder_flags;
+    uint32_t crdate;   // HFS+ creation date (seconds since 1904)
+    uint32_t mddate;   // HFS+ modification date
 };
 
 // List directory contents. path uses Mac-style ":" separators.

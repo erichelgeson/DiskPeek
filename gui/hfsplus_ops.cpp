@@ -349,6 +349,8 @@ static int list_dir_impl(HFSPlusVolume* vol, HFSCatalogNodeID folderID,
             e->data_size = 0;
             e->rsrc_size = 0;
             e->finder_flags = f->userInfo.finderFlags;
+            e->crdate = f->createDate;
+            e->mddate = f->contentModDate;
             memset(e->type, 0, 5);
             memset(e->creator, 0, 5);
         } else if (cur->record->recordType == kHFSPlusFileRecord) {
@@ -358,6 +360,8 @@ static int list_dir_impl(HFSPlusVolume* vol, HFSCatalogNodeID folderID,
             e->data_size = f->dataFork.logicalSize;
             e->rsrc_size = f->resourceFork.logicalSize;
             e->finder_flags = f->userInfo.finderFlags;
+            e->crdate = f->createDate;
+            e->mddate = f->contentModDate;
 
             uint32_t ft = f->userInfo.fileType;
             uint32_t fc = f->userInfo.fileCreator;

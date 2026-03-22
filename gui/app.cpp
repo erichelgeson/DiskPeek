@@ -1,5 +1,5 @@
 /*
- * HFS Browser - Application implementation
+ * Disk Peek - Application implementation
  */
 
 #include "app.h"
@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <climits>
+#include <ctime>
 #include <filesystem>
 #include <functional>
 
@@ -181,6 +182,7 @@ App::~App() { shutdown(); }
 
 void App::init() {
     status_text_ = "Open an HFS disk image to begin (or drag & drop)";
+    memset(search_buf_, 0, sizeof(search_buf_));
 
     const char* home = getenv("HOME");
 }
@@ -424,6 +426,7 @@ void App::close_image() {
     entries_.clear();
     selected_entry_ = -1;
     status_text_ = "Open an HFS disk image to begin";
+    memset(search_buf_, 0, sizeof(search_buf_));
 }
 
 // --- Directory listing ---
@@ -460,6 +463,8 @@ void App::refresh_listing() {
         e.rsize = (unsigned long)hb.rsrc_size;
         memcpy(e.type, hb.type, 5);
         memcpy(e.creator, hb.creator, 5);
+        e.crdate = hb.crdate;
+        e.mddate = hb.mddate;
         entries_.push_back(std::move(e));
     }
 
@@ -538,7 +543,7 @@ void App::load_entry_icons() {
         GLuint tex = create_icon_from_rsrc(rsrc);
         if (tex) {
             e.icon_tex = tex;
-            fprintf(stderr, "hfsbrowser: loaded icon for %s\n", e.name.c_str());
+            //fprintf(stderr, "hfsbrowser: loaded icon for %s\n", e.name.c_str());
         }
     }
 }
@@ -617,7 +622,7 @@ void App::render() {
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    ImGui::Begin("HFS Browser", nullptr, window_flags);
+    ImGui::Begin("Disk Peek", nullptr, window_flags);
 
     render_toolbar();
     ImGui::Separator();
@@ -638,6 +643,7 @@ void App::render() {
     render_rename_popup();
     render_check_popup();
     render_about_popup();
+    render_new_image_popup();
     process_dialog_result();
 
     ImGui::End();
@@ -646,6 +652,12 @@ void App::render() {
 void App::render_toolbar() {
     if (ImGui::Button("Open Image")) {
         show_open_dialog();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("New Image")) {
+        show_new_image_ = true;
+        snprintf(new_image_name_, sizeof(new_image_name_), "Untitled");
+        new_image_size_mb_ = 100;
     }
     ImGui::SameLine();
     if (ImGui::Button("About")) {
@@ -767,21 +779,100 @@ void App::render_file_list() {
         return;
     }
 
+    // Search bar
+    ImGui::SetNextItemWidth(200);
+    ImGui::InputTextWithHint("##search", "Search...", search_buf_, sizeof(search_buf_));
+    ImGui::SameLine();
+    if (search_buf_[0] && ImGui::SmallButton("X##clearsearch")) {
+        memset(search_buf_, 0, sizeof(search_buf_));
+    }
 
-    if (ImGui::BeginTable("files", 4,
+    // Build filtered index list for search
+    std::vector<int> visible;
+    visible.reserve(entries_.size());
+    for (int i = 0; i < (int)entries_.size(); i++) {
+        if (search_buf_[0]) {
+            // Case-insensitive substring match
+            std::string lower_name = entries_[i].name;
+            std::string lower_search = search_buf_;
+            for (auto& ch : lower_name) ch = tolower((unsigned char)ch);
+            for (auto& ch : lower_search) ch = tolower((unsigned char)ch);
+            if (lower_name.find(lower_search) == std::string::npos)
+                continue;
+        }
+        visible.push_back(i);
+    }
+
+    if (ImGui::BeginTable("files", 5,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBodyUntilResize)) {
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBodyUntilResize |
+            ImGuiTableFlags_Sortable)) {
 
         float icon_sz = ImGui::GetTextLineHeight();
 
-        ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, icon_sz + 16);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("##icon", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, icon_sz + 16);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
         ImGui::TableSetupColumn("Type/Creator", ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGui::TableSetupColumn("DF/RF Size", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Modified", ImGuiTableColumnFlags_WidthFixed, 110.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        for (int i = 0; i < (int)entries_.size(); i++) {
+        // Column sorting
+        if (ImGuiTableSortSpecs* sort_specs = ImGui::TableGetSortSpecs()) {
+            if (sort_specs->SpecsDirty && sort_specs->SpecsCount > 0) {
+                const ImGuiTableColumnSortSpecs& spec = sort_specs->Specs[0];
+                sort_column_ = spec.ColumnIndex;
+                sort_ascending_ = (spec.SortDirection == ImGuiSortDirection_Ascending);
+
+                std::sort(entries_.begin(), entries_.end(),
+                    [this](const HFSEntry& a, const HFSEntry& b) {
+                        // Directories always first
+                        if (a.is_dir != b.is_dir)
+                            return a.is_dir > b.is_dir;
+
+                        int cmp = 0;
+                        switch (sort_column_) {
+                        case 1: // Name
+                            cmp = strcasecmp(a.name.c_str(), b.name.c_str());
+                            break;
+                        case 2: // Type/Creator
+                            cmp = strcmp(a.type, b.type);
+                            if (cmp == 0) cmp = strcmp(a.creator, b.creator);
+                            break;
+                        case 3: // Size
+                            cmp = (a.size < b.size) ? -1 : (a.size > b.size) ? 1 : 0;
+                            break;
+                        case 4: // Modified
+                            cmp = (a.mddate < b.mddate) ? -1 : (a.mddate > b.mddate) ? 1 : 0;
+                            break;
+                        default:
+                            cmp = strcasecmp(a.name.c_str(), b.name.c_str());
+                            break;
+                        }
+                        return sort_ascending_ ? (cmp < 0) : (cmp > 0);
+                    });
+
+                // Rebuild visible indices after sort
+                visible.clear();
+                for (int i = 0; i < (int)entries_.size(); i++) {
+                    if (search_buf_[0]) {
+                        std::string lower_name = entries_[i].name;
+                        std::string lower_search = search_buf_;
+                        for (auto& ch : lower_name) ch = tolower((unsigned char)ch);
+                        for (auto& ch : lower_search) ch = tolower((unsigned char)ch);
+                        if (lower_name.find(lower_search) == std::string::npos)
+                            continue;
+                    }
+                    visible.push_back(i);
+                }
+
+                sort_specs->SpecsDirty = false;
+            }
+        }
+
+        for (int vi = 0; vi < (int)visible.size(); vi++) {
+            int i = visible[vi];
             const HFSEntry& e = entries_[i];
 
             // Check if file is invisible (Finder flag kIsInvisible = 0x4000)
@@ -1052,11 +1143,63 @@ void App::render_file_list() {
                             format_size(e.rsize).c_str());
             }
 
+            // Modified date
+            ImGui::TableNextColumn();
+            if (e.mddate != 0) {
+                char datebuf[32];
+                struct tm* tm = localtime(&e.mddate);
+                if (tm)
+                    strftime(datebuf, sizeof(datebuf), "%b %d %Y", tm);
+                else
+                    datebuf[0] = '\0';
+                ImGui::Text("%s", datebuf);
+            }
+
             if (is_hidden)
                 ImGui::PopStyleVar();
         }
 
         ImGui::EndTable();
+    }
+
+    // Keyboard shortcuts
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
+        bool has_sel = (selected_entry_ >= 0 && selected_entry_ < (int)entries_.size());
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && has_sel) {
+            const HFSEntry& e = entries_[selected_entry_];
+            confirm_text_ = "Delete \"" + e.name + "\"?";
+            confirm_target_ = current_path_ + e.name;
+            confirm_is_dir_ = e.is_dir;
+            show_confirm_ = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter) && has_sel) {
+            const HFSEntry& e = entries_[selected_entry_];
+            if (e.is_dir)
+                navigate_to(e.name.c_str());
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
+            navigate_up();
+        }
+        if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_X) && has_sel) {
+            const HFSEntry& e = entries_[selected_entry_];
+            cut_path_ = current_path_ + e.name;
+            cut_name_ = e.name;
+            cut_is_dir_ = e.is_dir;
+            status_text_ = "Cut: " + e.name;
+        }
+        if ((ImGui::GetIO().KeyMods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_V) && !cut_path_.empty()) {
+            std::string dest = current_path_ + cut_name_;
+            int rc = vol_->rename(cut_path_, dest);
+            if (rc != 0)
+                set_error("Move failed");
+            else {
+                status_text_ = "Moved: " + cut_name_;
+                cut_path_.clear();
+                cut_name_.clear();
+                refresh_listing();
+            }
+        }
     }
 
     ImGui::EndChild();
@@ -1485,13 +1628,13 @@ void App::run_volume_check() {
 
 void App::render_about_popup() {
     if (show_about_)
-        ImGui::OpenPopup("About HFS Browser");
+        ImGui::OpenPopup("About Disk Peek");
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    if (ImGui::BeginPopupModal("About HFS Browser", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("HFS Browser");
+    if (ImGui::BeginPopupModal("About Disk Peek", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Disk Peek");
         ImGui::Text("A tool for browsing and editing classic Macintosh");
         ImGui::Text("HFS and HFS+ disk images.");
         ImGui::Spacing();
@@ -1537,6 +1680,51 @@ void App::render_about_popup() {
 
         if (ImGui::Button("OK", ImVec2(120, 0))) {
             show_about_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+// Forward declaration for dialog callback (defined in native dialog section below)
+static void dialog_callback(void* userdata, const char* const* filelist, int /*filter*/);
+
+void App::render_new_image_popup() {
+    if (show_new_image_)
+        ImGui::OpenPopup("New HFS Image");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("New HFS Image", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Volume Name:");
+        ImGui::SetNextItemWidth(200);
+        ImGui::InputText("##volname", new_image_name_, sizeof(new_image_name_));
+
+        ImGui::Text("Size:");
+        ImGui::SetNextItemWidth(200);
+        static const char* size_labels[] = { "100 MB", "250 MB", "500 MB", "1 GB", "2 GB" };
+        static const int size_values[] = { 100, 250, 500, 1024, 2048 };
+        int cur_idx = 0;
+        for (int s = 0; s < 5; s++) {
+            if (size_values[s] == new_image_size_mb_) { cur_idx = s; break; }
+        }
+        if (ImGui::Combo("##imgsize", &cur_idx, size_labels, 5)) {
+            new_image_size_mb_ = size_values[cur_idx];
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Create...", ImVec2(100, 0))) {
+            show_new_image_ = false;
+            ImGui::CloseCurrentPopup();
+            // Show native save dialog
+            pending_op_ = DialogOp::NEW_IMAGE;
+            SDL_DialogFileFilter filters[] = { { "HFS Disk Images", "hda;img;dsk" } };
+            SDL_ShowSaveFileDialog(dialog_callback, this, SDL_GetKeyboardFocus(), filters, 1, nullptr);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            show_new_image_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1655,6 +1843,42 @@ void App::process_dialog_result() {
             export_icon_png(path + "/" + e.name + ".png", e, hfs_path);
         }
         break;
+    case DialogOp::NEW_IMAGE: {
+        // Ensure path has an extension
+        std::string img_path = path;
+        if (img_path.find('.') == std::string::npos)
+            img_path += ".hda";
+
+        // Create the file with the right size
+        FILE* f = fopen(img_path.c_str(), "wb");
+        if (!f) {
+            set_error("Failed to create file: " + img_path);
+            break;
+        }
+        // Write sparse file by seeking to end
+        if (fseek(f, (long)((uint64_t)new_image_size_mb_ * 1024UL * 1024UL - 1), SEEK_SET) != 0) {
+            fclose(f);
+            remove(img_path.c_str());
+            set_error("Failed to allocate file size");
+            break;
+        }
+        fputc(0, f);
+        fclose(f);
+
+        // Format as HFS
+        char vol_name[256];
+        snprintf(vol_name, sizeof(vol_name), "%s", new_image_name_);
+        if (hfs_format(img_path.c_str(), 0, 0, vol_name, 0, nullptr) != 0) {
+            remove(img_path.c_str());
+            set_error("Failed to format HFS image");
+            break;
+        }
+
+        // Open the newly created image
+        open_image(img_path.c_str());
+        status_text_ = "Created new HFS image: " + img_path;
+        break;
+    }
     default:
         break;
     }

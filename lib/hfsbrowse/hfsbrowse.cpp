@@ -76,6 +76,8 @@ public:
                 memcpy(e.type, ent.u.file.type, 5);
                 memcpy(e.creator, ent.u.file.creator, 5);
             }
+            e.crdate = ent.crdate;
+            e.mddate = ent.mddate;
             result.push_back(std::move(e));
         }
         hfs_closedir(dir);
@@ -250,6 +252,11 @@ public:
             e.fdflags = ents[i].finder_flags;
             e.data_size = ents[i].data_size;
             e.rsrc_size = ents[i].rsrc_size;
+            // Convert HFS+ dates (seconds since 1904) to Unix time
+            // HFS+ epoch is Jan 1 1904; Unix epoch is Jan 1 1970 (2082844800 seconds apart)
+            static const uint32_t kMacEpochOffset = 2082844800U;
+            e.crdate = (ents[i].crdate > kMacEpochOffset) ? (time_t)(ents[i].crdate - kMacEpochOffset) : 0;
+            e.mddate = (ents[i].mddate > kMacEpochOffset) ? (time_t)(ents[i].mddate - kMacEpochOffset) : 0;
             memcpy(e.type, ents[i].type, 5);
             memcpy(e.creator, ents[i].creator, 5);
             result.push_back(std::move(e));
@@ -275,6 +282,11 @@ public:
             e.fdflags = ents[i].finder_flags;
             e.data_size = ents[i].data_size;
             e.rsrc_size = ents[i].rsrc_size;
+            // Convert HFS+ dates (seconds since 1904) to Unix time
+            // HFS+ epoch is Jan 1 1904; Unix epoch is Jan 1 1970 (2082844800 seconds apart)
+            static const uint32_t kMacEpochOffset = 2082844800U;
+            e.crdate = (ents[i].crdate > kMacEpochOffset) ? (time_t)(ents[i].crdate - kMacEpochOffset) : 0;
+            e.mddate = (ents[i].mddate > kMacEpochOffset) ? (time_t)(ents[i].mddate - kMacEpochOffset) : 0;
             memcpy(e.type, ents[i].type, 5);
             memcpy(e.creator, ents[i].creator, 5);
             result.push_back(std::move(e));

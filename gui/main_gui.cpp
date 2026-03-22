@@ -1,5 +1,5 @@
 /*
- * HFS Browser - GUI for browsing Macintosh HFS disk images
+ * Disk Peek - GUI for browsing Macintosh HFS disk images
  * Main entry point with SDL3/OpenGL/ImGui setup
  */
 
@@ -13,6 +13,7 @@
 #include "app.h"
 
 #include <cstring>
+#include <cstdio>
 
 int main(int, char**) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -29,7 +30,7 @@ int main(int, char**) {
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
     SDL_Window* window = SDL_CreateWindow(
-        "HFS Browser",
+        "Disk Peek",
         1024, 700,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
@@ -138,8 +139,12 @@ int main(int, char**) {
     style.ItemSpacing       = ImVec2(6, 4);
 
     style.ScaleAllSizes(scale);
-    io.Fonts->AddFontDefault();
-    io.FontGlobalScale = scale;
+
+    // Load Chicago font (classic Mac), fall back to default if missing
+    ImFont* font = io.Fonts->AddFontFromFileTTF("lib/fonts/ChicagoFLF.ttf", 14.0f * scale);
+    if (!font)
+        io.Fonts->AddFontDefault();
+    io.FontGlobalScale = 1.0f;  // font already scaled by size parameter
 
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -181,6 +186,12 @@ int main(int, char**) {
         ImGui::NewFrame();
 
         app.render();
+
+        // Update OS window title to reflect volume state
+        if (app.has_volume())
+            SDL_SetWindowTitle(window, ("Disk Peek \xe2\x80\x94 " + app.volume_name()).c_str());
+        else
+            SDL_SetWindowTitle(window, "Disk Peek");
 
         if (app.should_quit())
             done = true;

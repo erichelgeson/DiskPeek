@@ -21,6 +21,8 @@ struct HBEntry {
     char type[5] = {};
     char creator[5] = {};
     int16_t fdflags = 0;
+    time_t crdate = 0;   // creation date
+    time_t mddate = 0;   // modification date
     std::vector<uint8_t> icon_rgba;  // 64x64 RGBA pixel data (empty if no icon)
 };
 
