@@ -170,6 +170,8 @@ int main(int, char**) {
         0x2260, 0x2260, // ≠
         0x2264, 0x2265, // ≤ ≥
         0x25CA, 0x25CA, // ◊
+        0x2695, 0x2695, // ⚕ (staff of Aesculapius / medical)
+        0x271A, 0x271A, // ✚ (heavy greek cross / first aid)
         0xFB01, 0xFB02, // fi fl ligatures
         0,
     };

@@ -84,6 +84,7 @@ private:
     void render_new_image_popup();
     void run_volume_check();
     bool show_about_ = false;
+    bool show_alpha_warning_ = true;
     bool show_new_image_ = false;
     char new_image_name_[256] = {};
     int new_image_size_mb_ = 100;

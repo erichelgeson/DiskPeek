@@ -672,6 +672,25 @@ void App::render() {
     render_new_image_popup();
     process_dialog_result();
 
+    // Alpha warning on first launch
+    if (show_alpha_warning_)
+        ImGui::OpenPopup("Alpha Software");
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Alpha Software", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Disk Peek is currently in Alpha.");
+        ImGui::Spacing();
+        ImGui::Text("Writing to disk images may cause data loss.");
+        ImGui::Text("Please back up your data before use.");
+        ImGui::Spacing();
+        if (ImGui::Button("I Understand", ImVec2(200, 0))) {
+            show_alpha_warning_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     ImGui::End();
 
     // Render ResEdit windows (outside the main window)
@@ -679,32 +698,25 @@ void App::render() {
 }
 
 void App::render_toolbar() {
-    if (ImGui::Button("Open Image")) {
-        show_open_dialog();
+    if (has_volume()) {
+        if (ImGui::Button("Close")) {
+            close_image();
+        }
+    } else {
+        if (ImGui::Button("Open")) {
+            show_open_dialog();
+        }
     }
     ImGui::SameLine();
-    if (ImGui::Button("New Image")) {
+    if (ImGui::Button("New")) {
         show_new_image_ = true;
         snprintf(new_image_name_, sizeof(new_image_name_), "Untitled");
         new_image_size_mb_ = 100;
     }
-    ImGui::SameLine();
-    if (ImGui::Button("About")) {
-        show_about_ = true;
-    }
-
-    ImGui::SameLine();
-
-    bool close_disabled = !has_volume();
-    if (close_disabled) ImGui::BeginDisabled();
-    if (ImGui::Button("Close")) {
-        close_image();
-    }
-    if (close_disabled) ImGui::EndDisabled();
 
     if (has_volume()) {
         ImGui::SameLine();
-        if (ImGui::Button("Check")) {
+        if (ImGui::Button("First Aid")) {
             run_volume_check();
             show_check_ = true;
             refresh_listing();
@@ -718,6 +730,13 @@ void App::render_toolbar() {
             format_size(vol_total_bytes_).c_str(),
             format_size(vol_free_bytes_).c_str());
     }
+
+    // Right-align the about button
+    ImGui::SameLine(ImGui::GetWindowWidth() - 40);
+    if (ImGui::Button("?")) {
+        show_about_ = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("About Disk Peek");
 }
 
 void App::render_path_bar() {
