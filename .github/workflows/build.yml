@@ -60,11 +60,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: brew install meson ninja sdl3
+      - name: Install build tools
+        run: brew install meson ninja
+
+      - name: Build SDL3 static
+        run: |
+          git clone --depth 1 --branch release-3.2.14 https://github.com/libsdl-org/SDL.git /tmp/SDL3
+          cmake -S /tmp/SDL3 -B /tmp/SDL3/build \
+            -DCMAKE_INSTALL_PREFIX=$HOME/sdl3-static \
+            -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/SDL3/build -j$(sysctl -n hw.ncpu)
+          cmake --install /tmp/SDL3/build
 
       - name: Build
         run: |
+          export PKG_CONFIG_PATH="$HOME/sdl3-static/lib/pkgconfig:$PKG_CONFIG_PATH"
           meson setup builddir
           ninja -C builddir
 
