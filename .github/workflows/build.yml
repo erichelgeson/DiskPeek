@@ -2,10 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
     tags: ['v*']
   pull_request:
-    branches: [master]
+    branches: [master, main]
 
 env:
   DISKPEEK_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
@@ -177,7 +177,7 @@ jobs:
 
   deploy-pages:
     name: Deploy GitHub Pages
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
