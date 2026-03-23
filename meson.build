@@ -112,10 +112,12 @@ phosg_src = files(
   'lib/phosg/Strings.cc',
   'lib/phosg/Encoding.cc',
   'lib/phosg/Filesystem.cc',
-  'lib/phosg/Filesystem-Unix.cc',
   'lib/phosg/Hash.cc',
   'lib/phosg/Time.cc',
 )
+if host_machine.system() != 'windows'
+  phosg_src += files('lib/phosg/Filesystem-Unix.cc')
+endif
 
 phosg_cpp_args = []
 if cxx.get_id() != 'msvc'
