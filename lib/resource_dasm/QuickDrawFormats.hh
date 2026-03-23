@@ -1,5 +1,11 @@
 #pragma once
 
+// windows.h defines macros that clash with QuickDraw type/enum names
+#ifdef _WIN32
+#  undef TRANSPARENT
+#  undef OPAQUE
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
