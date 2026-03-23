@@ -43,7 +43,7 @@ struct ResEditWindow {
     GLuint preview_tex = 0;
     int preview_w = 0, preview_h = 0;
     std::string preview_text;
-    enum class PreviewType { NONE, IMAGE, TEXT, HEX, SOUND, ERROR };
+    enum class PreviewType { NONE, IMAGE, TEXT, HEX, SOUND, DECODE_ERROR };
     PreviewType preview_type = PreviewType::NONE;
     std::string error_text;
     uint32_t last_preview_res_type = 0;
