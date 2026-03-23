@@ -10,7 +10,13 @@
 #include <string>
 
 #ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
 #  include <windows.h>
+#  undef near
+#  undef far
+#  undef TRANSPARENT
+#  undef OPAQUE
 #  include <io.h>
 #  include <direct.h>
 #  define platform_mkdir(path) _mkdir(path)

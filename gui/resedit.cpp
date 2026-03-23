@@ -162,6 +162,9 @@ GLuint ResEditWindow::upload_rgba_texture(const uint8_t* data, int w, int h) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     // phosg stores pixels as uint32_t with R in MSB: 0xRRGGBBAA
     // GL_UNSIGNED_INT_8_8_8_8 reads the uint32 value directly, matching this layout
+#ifndef GL_UNSIGNED_INT_8_8_8_8
+#define GL_UNSIGNED_INT_8_8_8_8 0x8035
+#endif
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, data);
     return tex;
 }
