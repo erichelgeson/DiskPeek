@@ -183,7 +183,12 @@ resource_file_lib = static_library('resource_file',
 )
 
 # GUI application
-sdl3_dep = dependency('sdl3')
+# Static SDL3 on macOS for portable binaries, dynamic elsewhere
+if host_machine.system() == 'darwin'
+  sdl3_dep = dependency('sdl3', static : true)
+else
+  sdl3_dep = dependency('sdl3')
+endif
 gl_dep = dependency('gl')
 thread_dep = dependency('threads')
 
