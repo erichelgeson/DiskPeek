@@ -1,5 +1,16 @@
 #pragma once
 
+// windows.h defines macros that clash with names used in this header
+#ifdef _WIN32
+#  undef VOID
+#  undef ALTERNATE
+#  undef TRANSPARENT
+#  undef OPAQUE
+#  undef near
+#  undef far
+#  undef small
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
